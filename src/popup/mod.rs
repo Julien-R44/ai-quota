@@ -115,7 +115,6 @@ impl<'a> Layout<'a> {
     }
 }
 
-/// Height of `view` for the current app state.
 fn layout_height(view: View) -> f32 {
     let app = app();
     let (snap, expanded) = (app.snapshot.borrow(), app.expanded.borrow());
@@ -131,7 +130,6 @@ enum Hit {
     Row(usize),
     /// Header cog: Settings view.
     Gear,
-    /// Back to the parent view.
     Back,
     Ctl(Ctl),
 }
@@ -169,7 +167,6 @@ impl Hits {
     }
 }
 
-/// Animation state of the frame being drawn.
 struct Anim {
     /// Seconds since the popup opened.
     t: f32,
@@ -276,7 +273,6 @@ pub fn show_settings() {
     }
 }
 
-/// A setting changed: language, providers, theme...
 pub fn on_settings_changed(theme_changed: bool) {
     if theme_changed {
         on_theme_changed();

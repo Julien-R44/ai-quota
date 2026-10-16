@@ -20,7 +20,6 @@ pub enum ThemePref {
 pub struct Settings {
     pub lang: Lang,
     pub theme: ThemePref,
-    /// Tracked providers.
     pub enabled: PerProvider<bool>,
     pub poll_minutes: u32,
     /// Poll every 2 min while a limit is above 80 %.

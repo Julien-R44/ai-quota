@@ -62,7 +62,6 @@ pub(super) struct Gfx {
     brush: ID2D1SolidColorBrush,
     round: ID2D1StrokeStyle,
     dash: ID2D1StrokeStyle,
-    /// Vector logos.
     logos: PerProvider<ID2D1PathGeometry>,
     pub(super) fonts: Fonts,
     /// Global opacity (opening and view-change fades).

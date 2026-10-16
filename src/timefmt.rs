@@ -262,12 +262,10 @@ pub fn eta_text(ts: i64, now: i64) -> String {
     }
 }
 
-/// "Mis à jour il y a 3 min"
 pub fn ago_text(ts: i64, now: i64) -> String {
     format!("{} {}", tr("Mis à jour", "Updated"), age_text(ts, now))
 }
 
-/// "à l’instant" / "il y a 3 min"
 pub fn age_text(ts: i64, now: i64) -> String {
     let diff = (now - ts).max(0);
     match (lang(), diff) {

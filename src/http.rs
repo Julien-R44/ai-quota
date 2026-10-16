@@ -52,7 +52,6 @@ pub trait Http: Sync {
     fn post(&self, host: &str, path: &str, headers: &[(&str, &str)], body: &[u8]) -> Result<Response, String>;
 }
 
-/// The real adapter: HTTPS through `WinHTTP`.
 pub struct WinHttp;
 
 impl Http for WinHttp {

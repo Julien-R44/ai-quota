@@ -77,7 +77,7 @@ thread_local! {
     static APP: Cell<Option<&'static App>> = const { Cell::new(None) };
 }
 
-/// The global state. UI thread only.
+/// UI thread only.
 pub fn app() -> &'static App {
     APP.get().expect("app() called before init or off the UI thread")
 }

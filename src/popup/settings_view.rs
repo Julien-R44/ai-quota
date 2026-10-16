@@ -43,7 +43,6 @@ pub(super) enum Ctl {
     OpenTokenPage,
 }
 
-/// Providers that have their own settings page.
 fn has_settings_page(p: Provider) -> bool {
     match p {
         Provider::Amp => true,
@@ -259,7 +258,6 @@ pub(super) fn draw_provider(
     let s = &layout.token;
     draw_section(gfx, th, tr("Token d’accès", "Access token"), s);
 
-    // Row 1: state + Paste / Remove.
     let ry = s.row(0);
     let state = ctx.amp_note.unwrap_or(if ctx.amp_token {
         tr("Token enregistré (chiffré)", "Token saved (encrypted)")
@@ -283,7 +281,6 @@ pub(super) fn draw_provider(
         DWRITE_TEXT_ALIGNMENT_LEADING,
     );
 
-    // Row 2: link to the page where the token is created.
     let ly = s.row(1);
     let link = rect(x + 4.0, ly + 2.0, w - 8.0, SETTING_ROW - 4.0);
     let hovered = hits.add(link, Hit::Ctl(Ctl::OpenTokenPage));

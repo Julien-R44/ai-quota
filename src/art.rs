@@ -1,7 +1,6 @@
 //! App icon drawn as a signed distance field (SDF). Shared by `build.rs` (generates the exe's
 //! .ico) and the app (tray icon, rendered at the exact size of the current DPI, so always sharp).
 
-/// Distance from a point to the segment [a, b].
 fn seg_dist(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
     let (pax, pay) = (p.0 - a.0, p.1 - a.1);
     let (bax, bay) = (b.0 - a.0, b.1 - a.1);

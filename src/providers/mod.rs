@@ -55,8 +55,7 @@ impl Ctx<'static> {
     }
 }
 
-/// `forced`: refresh requested by the user, which overrides the pause imposed
-/// by a 429. `enabled`: tracked providers, in `Provider` order.
+/// `forced`: refresh requested by the user, which overrides the pause imposed by a 429.
 pub fn fetch_all(forced: bool, enabled: PerProvider<bool>) -> Snapshot {
     fetch_all_in(&Ctx::system(), forced, enabled)
 }
@@ -86,8 +85,6 @@ fn home() -> PathBuf {
 fn read_json(path: &Path) -> Option<Value> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
-
-// ------------------------------------------- persisted state (cooldown, cache)
 
 /// `<state_dir>\<provider>.<ext>`: survives restarts, so relaunching the app does not hit the API
 /// again.
@@ -198,7 +195,6 @@ fn resolve(
     }
 }
 
-/// What is extracted from a usage response.
 struct Parsed {
     plan: Option<String>,
     limits: Vec<Limit>,
@@ -219,7 +215,6 @@ fn capitalize(s: &str) -> String {
     c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 
-/// Saturating conversion for counts read from JSON.
 fn count(n: u64) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
 }

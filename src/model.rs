@@ -88,7 +88,7 @@ impl<T> IndexMut<Provider> for PerProvider<T> {
     }
 }
 
-/// Kind of limit window. The label is computed at display time, in the current language.
+/// The label is computed at display time, in the current language.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LimitKind {
     Session {
@@ -107,7 +107,6 @@ pub enum LimitKind {
     Other(String),
 }
 
-/// Amount left on a limit counted in dollars or hours.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Amount {
     Dollars { left: f64, total: f64 },

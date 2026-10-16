@@ -57,7 +57,6 @@ impl Tray {
         notify_icon(NIM_SETVERSION, &nid);
     }
 
-    /// Theme or DPI changed: redraw the icon.
     pub fn refresh_icon(&mut self) {
         let old = self.icon;
         self.icon = make_icon(self.hwnd);

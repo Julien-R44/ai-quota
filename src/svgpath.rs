@@ -194,7 +194,7 @@ pub fn geometry(factory: &ID2D1Factory, d: &str, even_odd: bool) -> Result<ID2D1
                     }
                     cur = start;
                 }
-                _ => break, // unknown command: stop cleanly
+                _ => break,
             }
             last_cubic = next_cubic;
             last_quad = next_quad;
