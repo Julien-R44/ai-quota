@@ -3,15 +3,13 @@
 use std::time::Instant;
 
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F};
-use windows::Win32::Graphics::DirectWrite::*;
-use windows::Win32::Graphics::Gdi::InvalidateRect;
-use windows::Win32::UI::Shell::ShellExecuteW;
-use windows::Win32::UI::WindowsAndMessaging::{SW_SHOWNORMAL, SetTimer};
-use windows::core::{HSTRING, w};
+use windows::Win32::Graphics::DirectWrite::{DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING};
 
 use super::gfx::Gfx;
 use super::theme::Theme;
-use super::{CONFIRM_SECS, CONFIRM_TIMER, HEADER_H, Hit, Hits, MARGIN, View, WIDTH, close, rect, with_popup};
+use super::{
+    CONFIRM_SECS, HEADER_H, Hit, Hits, MARGIN, View, WIDTH, close, invalidate, open_external, rect, with_popup,
+};
 use crate::i18n::{self, Lang, tr};
 use crate::model::Provider;
 use crate::settings::{POLL_CHOICES, ThemePref};
@@ -347,7 +345,7 @@ fn segmented(gfx: &Gfx, th: &Theme, hits: &mut Hits, right: f32, row_y: f32, ite
 fn toggle(gfx: &Gfx, th: &Theme, right: f32, row_y: f32, on: bool) {
     let (w, h) = (40.0, 20.0);
     let r = rect(right - w, row_y + (SETTING_ROW - h) / 2.0, w, h);
-    let cy = (r.top + r.bottom) / 2.0;
+    let cy = f32::midpoint(r.top, r.bottom);
     if on {
         gfx.fill(r, h / 2.0, th.accent());
         gfx.disc((r.right - 10.0, cy), 6.0, th.on_accent());
@@ -375,7 +373,7 @@ fn note_amp(text: &str) {
     with_popup(|p| {
         p.amp_token = secret::has_amp_token();
         p.amp_note = Some((text.to_string(), Instant::now()));
-        unsafe { SetTimer(Some(p.hwnd), CONFIRM_TIMER, (CONFIRM_SECS * 1000.0) as u32, None) };
+        p.start_confirmation_timer();
     });
 }
 
@@ -399,17 +397,13 @@ pub(super) fn apply(ctl: Ctl) {
             if let Some(dir) = std::env::var_os("LOCALAPPDATA") {
                 let dir = std::path::PathBuf::from(dir).join("ai-quota");
                 let _ = std::fs::create_dir_all(&dir);
-                unsafe {
-                    ShellExecuteW(None, w!("open"), &HSTRING::from(dir.as_os_str()), None, None, SW_SHOWNORMAL);
-                }
+                open_external(dir.as_os_str());
             }
         }
         Ctl::ProviderPage(p) => {
             with_popup(|popup| popup.set_view(View::Provider(p)));
         }
-        Ctl::OpenTokenPage => unsafe {
-            ShellExecuteW(None, w!("open"), &HSTRING::from(AMP_TOKEN_URL), None, None, SW_SHOWNORMAL);
-        },
+        Ctl::OpenTokenPage => open_external(AMP_TOKEN_URL),
         Ctl::PasteAmpToken => {
             let token = secret::clipboard_text().map(|t| t.trim().to_string()).unwrap_or_default();
             let plausible = token.len() >= 16 && !token.chars().any(char::is_whitespace);
@@ -433,7 +427,7 @@ pub(super) fn apply(ctl: Ctl) {
                 let confirmed = p.confirm_clear.is_some_and(|at| at.elapsed().as_secs_f32() < CONFIRM_SECS);
                 p.confirm_clear = if confirmed { None } else { Some(Instant::now()) };
                 if !confirmed {
-                    unsafe { SetTimer(Some(p.hwnd), CONFIRM_TIMER, (CONFIRM_SECS * 1000.0) as u32, None) };
+                    p.start_confirmation_timer();
                 }
                 confirmed
             })
@@ -443,7 +437,5 @@ pub(super) fn apply(ctl: Ctl) {
             }
         }
     }
-    with_popup(|p| unsafe {
-        let _ = InvalidateRect(Some(p.hwnd), None, false);
-    });
+    with_popup(|p| invalidate(p.hwnd));
 }

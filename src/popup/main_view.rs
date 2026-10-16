@@ -1,7 +1,11 @@
 //! Main view: header, then one card per provider with its limit rows.
 
+use std::fmt::Write as _;
+
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F};
-use windows::Win32::Graphics::DirectWrite::*;
+use windows::Win32::Graphics::DirectWrite::{
+    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING,
+};
 use windows_numerics::{Matrix3x2, Vector2};
 
 use super::chart::{self, CHART_H};
@@ -119,7 +123,9 @@ fn card_layout<'a>(u: &'a Usage, expanded: Option<&str>, mut frame: D2D_RECT_F, 
         status => {
             let (text, is_error) = match status {
                 Status::Error(problem) => (problem.text(), true),
-                _ => (tr("Aucune limite active pour ce compte.", "No active limit on this account.").into(), false),
+                Status::Ok(_) => {
+                    (tr("Aucune limite active pour ce compte.", "No active limit on this account.").into(), false)
+                }
             };
             let top = y;
             y += MESSAGE_H;
@@ -173,7 +179,7 @@ fn draw_header(gfx: &Gfx, th: &Theme, hits: &mut Hits, snap: Option<&Snapshot>, 
     if hits.add(btn, Hit::Refresh) {
         gfx.fill(btn, 6.0, th.button_hover);
     }
-    let (cx, cy) = ((btn.left + btn.right) / 2.0, (btn.top + btn.bottom) / 2.0 + anim.dy);
+    let (cx, cy) = (f32::midpoint(btn.left, btn.right), f32::midpoint(btn.top, btn.bottom) + anim.dy);
     if anim.loading {
         gfx.transform(anim.base * Matrix3x2::rotation_around(anim.t * 400.0, Vector2 { X: cx, Y: cy }));
     }
@@ -226,7 +232,7 @@ fn draw_card(gfx: &Gfx, th: &Theme, hits: &mut Hits, card: &Card, anim: &Anim) -
                     let window = l.resets_at.zip(l.window_secs).map_or(0, |(r, w)| r - w);
                     let history = app().history.borrow();
                     let samples = history.window(&l.key, window);
-                    chart::draw(gfx, th, l, samples, brand, anim.reveal, (x, row.top + ROW_H), w);
+                    chart::draw(gfx, th, l, samples, brand, anim.reveal, rect(x, row.top + ROW_H, w, CHART_H));
                     done &= anim.reveal >= 1.0;
                 }
             }
@@ -344,7 +350,7 @@ fn draw_resets(gfx: &Gfx, th: &Theme, r: &BankedResets, brand: D2D1_COLOR_F, (x,
         (Lang::En, n) => format!("{n} free resets available"),
     };
     if let Some(at) = r.next_expiry {
-        text.push_str(&format!(" · {} {}", tr("expire", "expires"), timefmt::date_text(at)));
+        let _ = write!(text, " · {} {}", tr("expire", "expires"), timefmt::date_text(at));
     }
     gfx.text(&text, &gfx.fonts.caption, rect(x + 20.0, y, w - 20.0, h), th.text2, DWRITE_TEXT_ALIGNMENT_LEADING);
 }

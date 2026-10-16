@@ -1,8 +1,9 @@
 //! Usage chart shown under an expanded limit row.
 
-use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
-use windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_PER_PRIMITIVE;
-use windows::Win32::Graphics::DirectWrite::*;
+use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F};
+use windows::Win32::Graphics::DirectWrite::{
+    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING,
+};
 
 use super::gfx::Gfx;
 use super::rect;
@@ -18,7 +19,6 @@ pub(super) const CHART_H: f32 = CHART_TOP + CHART_PLOT + 42.0;
 
 /// Current window: recorded usage, steady pace (the diagonal) and the projection at the recent rate up to the
 /// reset.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn draw(
     gfx: &Gfx,
     th: &Theme,
@@ -26,9 +26,9 @@ pub(super) fn draw(
     samples: &[Sample],
     brand: D2D1_COLOR_F,
     reveal: f32,
-    (x, y): (f32, f32),
-    w: f32,
+    bounds: D2D_RECT_F,
 ) {
+    let (x, y, w) = (bounds.left, bounds.top, bounds.right - bounds.left);
     let top = y + CHART_TOP;
     let bottom = top + CHART_PLOT;
     let caption = rect(x, bottom + 20.0, w, 16.0);
@@ -65,12 +65,7 @@ pub(super) fn draw(
         DWRITE_TEXT_ALIGNMENT_LEADING,
     );
 
-    unsafe {
-        gfx.target.PushAxisAlignedClip(
-            &rect(x - 6.0, top - 6.0, (w + 12.0) * reveal, CHART_PLOT + 12.0),
-            D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-        );
-    }
+    let clip = gfx.clip(rect(x - 6.0, top - 6.0, (w + 12.0) * reveal, CHART_PLOT + 12.0));
     let projection = history::project(samples, start, reset);
     if let Some(last) = samples.last() {
         // A window starts at 0 %.
@@ -111,7 +106,7 @@ pub(super) fn draw(
         gfx.disc(here, 6.0, faint(line, 0.25));
         gfx.disc(here, 3.2, line);
     }
-    unsafe { gfx.target.PopAxisAlignedClip() };
+    drop(clip);
 
     let (text, color) = match (samples.last(), &projection) {
         (None, _) => (tr("Courbe en cours de constitution…", "Building up history…").to_string(), th.text3),
