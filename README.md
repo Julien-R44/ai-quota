@@ -80,35 +80,3 @@ Measured on the release build:
 The flyout is drawn with Direct2D in software, so no GPU driver loads into the process. It is created on click and destroyed on close, and the app then returns its memory to Windows.
 
 Polling runs every 5 minutes by default, or every 2 minutes above 80 %. It keeps running while the session is locked, so the history sees cloud tasks.
-
-## Stored files
-
-Everything lives in `%LOCALAPPDATA%\ai-quota`:
-
-| File | Content |
-|---|---|
-| `history.tsv` | Usage samples for the charts, kept 8 days |
-| `claude.json`, `codex.json`, `amp.json` | Last good response of each endpoint |
-| `*.cooldown` | End of the pause after a `429` |
-| `settings.json` | Settings |
-| `amp.token` | Amp token, encrypted with DPAPI |
-
-**Start with Windows** writes the `AI Quota` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
-
-## Code layout
-
-| File | Role |
-|---|---|
-| `src/main.rs` | Hidden window, message loop, timers, app state |
-| `src/tray.rs` | Tray icon, tooltip, context menu |
-| `src/popup.rs` | Flyout window, layout, Direct2D drawing, settings views |
-| `src/providers.rs` | Claude Code, Codex, and Amp fetching and parsing |
-| `src/history.rs` | Usage samples and the pace projection |
-| `src/settings.rs` | Settings file |
-| `src/secret.rs` | DPAPI encryption and clipboard |
-| `src/http.rs` | HTTPS over WinHTTP |
-| `src/i18n.rs`, `src/timefmt.rs` | English and French strings, dates |
-| `src/svgpath.rs`, `src/logos.rs` | SVG path parser and provider logos |
-| `src/art.rs`, `build.rs` | App icon drawn in code, embedded manifest |
-
-Logos come from [Simple Icons](https://simpleicons.org) (CC0), [Lobe Icons](https://github.com/lobehub/lobe-icons) (MIT), and the [Amp press kit](https://ampcode.com/press-kit).
