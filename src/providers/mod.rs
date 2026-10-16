@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::http::{Http, Response, WinHttp};
-use crate::model::{BankedResets, Credit, Limit, LimitKind, Problem, Provider, Snapshot, Status, Usage};
+use crate::model::{BankedResets, Credit, Limit, LimitKind, PerProvider, Problem, Provider, Snapshot, Status, Usage};
 use crate::secret;
 use crate::timefmt::now;
 
@@ -57,21 +57,26 @@ impl Ctx<'static> {
 
 /// `forced`: refresh requested by the user, which overrides the pause imposed
 /// by a 429. `enabled`: tracked providers, in `Provider` order.
-pub fn fetch_all(forced: bool, enabled: [bool; 3]) -> Snapshot {
+pub fn fetch_all(forced: bool, enabled: PerProvider<bool>) -> Snapshot {
     fetch_all_in(&Ctx::system(), forced, enabled)
 }
 
-fn fetch_all_in(ctx: &Ctx, forced: bool, enabled: [bool; 3]) -> Snapshot {
-    let fetchers: [fn(&Ctx, bool) -> Option<Usage>; 3] = [claude::fetch, codex::fetch, amp::fetch];
+fn fetch_all_in(ctx: &Ctx, forced: bool, enabled: PerProvider<bool>) -> Snapshot {
     let usages = std::thread::scope(|s| {
-        let threads: Vec<_> = fetchers
-            .into_iter()
-            .zip(enabled)
-            .map(|(fetch, on)| s.spawn(move || if on { fetch(ctx, forced) } else { None }))
-            .collect();
+        let threads: Vec<_> =
+            Provider::ALL.into_iter().filter(|&p| enabled[p]).map(|p| s.spawn(move || fetch(ctx, p, forced))).collect();
         threads.into_iter().filter_map(|t| t.join().ok().flatten()).collect()
     });
     Snapshot { usages, fetched_at: now() }
+}
+
+/// `None` when the provider's CLI is not signed in on this machine.
+fn fetch(ctx: &Ctx, p: Provider, forced: bool) -> Option<Usage> {
+    match p {
+        Provider::Claude => claude::fetch(ctx, forced),
+        Provider::Codex => codex::fetch(ctx, forced),
+        Provider::Amp => amp::fetch(ctx, forced),
+    }
 }
 
 fn home() -> PathBuf {

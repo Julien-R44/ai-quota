@@ -45,7 +45,10 @@ pub(super) enum Ctl {
 
 /// Providers that have their own settings page.
 fn has_settings_page(p: Provider) -> bool {
-    p == Provider::Amp
+    match p {
+        Provider::Amp => true,
+        Provider::Claude | Provider::Codex => false,
+    }
 }
 
 pub(super) struct SettingsCtx<'a> {
@@ -193,7 +196,7 @@ pub(super) fn draw(gfx: &Gfx, th: &Theme, hits: &mut Hits, ctx: &SettingsCtx, la
         row_hit(hits, py, Ctl::Provider(p));
         gfx.provider_logo(th, p, x + 14.0, py + 10.0);
         label(p.name(), py, 30.0, 90.0);
-        toggle(gfx, th, right, py, settings.is_enabled(p));
+        toggle(gfx, th, right, py, settings.enabled[p]);
         if has_settings_page(p) {
             // Registered after the row, so the cog wins over the toggle.
             let cog = rect(right - 40.0 - 36.0, py + 6.0, 28.0, SETTING_ROW - 12.0);
@@ -385,7 +388,7 @@ pub(super) fn apply(ctl: Ctl) {
             with_popup(|p| p.memory = memory_text());
         }
         Ctl::Theme(theme) => app.update_settings(|s| s.theme = theme),
-        Ctl::Provider(p) => app.update_settings(|s| s.enabled[p as usize] = !s.enabled[p as usize]),
+        Ctl::Provider(p) => app.update_settings(|s| s.enabled[p] = !s.enabled[p]),
         Ctl::Poll(minutes) => app.update_settings(|s| s.poll_minutes = minutes),
         Ctl::FasterWhenHot => app.update_settings(|s| s.poll_faster_when_hot = !s.poll_faster_when_hot),
         Ctl::Autostart => {

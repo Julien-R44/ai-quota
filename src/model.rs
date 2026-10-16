@@ -1,3 +1,5 @@
+use std::ops::{Index, IndexMut};
+
 use crate::i18n::{Lang, lang, tr};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -8,7 +10,17 @@ pub enum Provider {
 }
 
 impl Provider {
-    pub const ALL: [Provider; 3] = [Provider::Claude, Provider::Codex, Provider::Amp];
+    pub const COUNT: usize = 3;
+    pub const ALL: [Provider; Provider::COUNT] = [Provider::Claude, Provider::Codex, Provider::Amp];
+
+    /// Slot in [`PerProvider`]. A new variant does not compile until it gets one here.
+    const fn index(self) -> usize {
+        match self {
+            Provider::Claude => 0,
+            Provider::Codex => 1,
+            Provider::Amp => 2,
+        }
+    }
 
     pub fn name(self) -> &'static str {
         match self {
@@ -42,6 +54,36 @@ impl Provider {
                 tr("Colle un nouveau token d’accès dans les réglages.", "Paste a new access token in Settings.")
             }
         }
+    }
+}
+
+/// One value per provider, looked up by provider rather than by position: `enabled[Provider::Amp]`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PerProvider<T>([T; Provider::COUNT]);
+
+impl<T> PerProvider<T> {
+    pub fn from_fn(f: impl FnMut(Provider) -> T) -> Self {
+        PerProvider(Provider::ALL.map(f))
+    }
+
+    /// Like [`PerProvider::from_fn`], stopping at the first error.
+    pub fn try_from_fn<E>(f: impl FnMut(Provider) -> Result<T, E>) -> Result<Self, E> {
+        let [claude, codex, amp] = Provider::ALL.map(f);
+        Ok(PerProvider([claude?, codex?, amp?]))
+    }
+}
+
+impl<T> Index<Provider> for PerProvider<T> {
+    type Output = T;
+
+    fn index(&self, p: Provider) -> &T {
+        &self.0[p.index()]
+    }
+}
+
+impl<T> IndexMut<Provider> for PerProvider<T> {
+    fn index_mut(&mut self, p: Provider) -> &mut T {
+        &mut self.0[p.index()]
     }
 }
 
@@ -289,8 +331,20 @@ impl Snapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::{Amount, Lang, dollars};
+    use super::{Amount, Lang, PerProvider, Provider, dollars};
     use crate::i18n::LangGuard;
+
+    #[test]
+    fn per_provider_slots_follow_all() {
+        for (i, p) in Provider::ALL.into_iter().enumerate() {
+            assert_eq!(p.index(), i);
+        }
+        let mut names = PerProvider::from_fn(Provider::short_name);
+        assert_eq!(names[Provider::Amp], "Amp");
+        names[Provider::Codex] = "changed";
+        assert_eq!(names[Provider::Codex], "changed");
+        assert_eq!(names[Provider::Claude], "Claude");
+    }
 
     #[test]
     fn formats_amounts_with_thousands() {

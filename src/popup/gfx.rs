@@ -32,7 +32,7 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 use super::theme::{Theme, rgb};
 use super::{rect, window_size};
-use crate::model::Provider;
+use crate::model::{PerProvider, Provider};
 use crate::{logos, svgpath};
 
 fn wide(s: &str) -> Vec<u16> {
@@ -62,8 +62,8 @@ pub(super) struct Gfx {
     brush: ID2D1SolidColorBrush,
     round: ID2D1StrokeStyle,
     dash: ID2D1StrokeStyle,
-    /// Vector logos, in `Provider` order.
-    logos: [ID2D1PathGeometry; 3],
+    /// Vector logos.
+    logos: PerProvider<ID2D1PathGeometry>,
     pub(super) fonts: Fonts,
     /// Global opacity (opening and view-change fades).
     pub(super) alpha: f32,
@@ -153,11 +153,11 @@ impl Gfx {
             tiny: make(&text_family, DWRITE_FONT_WEIGHT_NORMAL, 10.0, false)?,
             caption_wrap: make(&text_family, DWRITE_FONT_WEIGHT_NORMAL, 12.0, true)?,
         };
-        let logos = [
-            svgpath::geometry(&factory, logos::CLAUDE, false)?,
-            svgpath::geometry(&factory, logos::CODEX, true)?,
-            svgpath::geometry(&factory, logos::AMP, false)?,
-        ];
+        let logos = PerProvider::try_from_fn(|p| match p {
+            Provider::Claude => svgpath::geometry(&factory, logos::CLAUDE, false),
+            Provider::Codex => svgpath::geometry(&factory, logos::CODEX, true),
+            Provider::Amp => svgpath::geometry(&factory, logos::AMP, false),
+        })?;
         Ok(Gfx {
             _ui_thread: PhantomData,
             factory,
@@ -394,12 +394,12 @@ impl Gfx {
                 let (vw, _) = logos::AMP_VIEWBOX;
                 let s = 15.5 / vw;
                 // The wordmark spans y 20..143 of the viewBox: center that band.
-                self.path(&self.logos[2], x + 2.25, y + 10.0 - 81.5 * s, s, rgb(0xDFDFC1, 1.0));
+                self.path(&self.logos[Provider::Amp], x + 2.25, y + 10.0 - 81.5 * s, s, rgb(0xDFDFC1, 1.0));
                 return;
             }
         };
         // The Claude and Codex paths use a 24x24 viewBox.
-        self.path(&self.logos[p as usize], x, y, 20.0 / 24.0, color);
+        self.path(&self.logos[p], x, y, 20.0 / 24.0, color);
     }
 
     fn fill_vertical_gradient(&self, r: D2D_RECT_F, radius: f32, top: D2D1_COLOR_F, bottom: D2D1_COLOR_F) {

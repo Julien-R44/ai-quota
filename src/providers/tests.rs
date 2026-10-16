@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use super::{Ctx, amp, claude, codex};
+use super::{Ctx, amp, claude, codex, fetch_all_in};
 use crate::http::{Http, Response};
-use crate::model::{Problem, Provider, Status, Usage};
+use crate::model::{PerProvider, Problem, Provider, Status, Usage};
 use crate::timefmt::now;
 
 /// Fake server: answers with scripted responses in order and records every request.
@@ -240,4 +240,19 @@ fn amp_auth_required_means_session_expired() {
 
     assert_eq!(problem(&usage), Problem::SessionExpired(Provider::Amp));
     assert_eq!(http.calls(), ["POST ampcode.com/api/internal?userDisplayBalanceInfo (Bearer amp-token)"]);
+}
+
+#[test]
+fn disabled_providers_are_not_fetched() {
+    let dir = TempDir::new();
+    dir.write("codex/auth.json", CODEX_AUTH);
+    dir.write("claude/.credentials.json", r#"{"claudeAiOauth": {"accessToken": "claude-token"}}"#);
+    let http = FakeHttp::new(vec![Ok(json(&codex_usage(42)))]);
+    let only_codex = PerProvider::from_fn(|p| p == Provider::Codex);
+
+    let snapshot = fetch_all_in(&ctx(&http, &dir.0), false, only_codex);
+
+    assert_eq!(http.calls(), ["GET chatgpt.com/backend-api/wham/usage (Bearer codex-token)"]);
+    let providers: Vec<_> = snapshot.usages.iter().map(|u| u.provider).collect();
+    assert_eq!(providers, [Provider::Codex]);
 }

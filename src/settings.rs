@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::i18n::{self, Lang};
-use crate::model::Provider;
+use crate::model::{PerProvider, Provider};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -20,8 +20,8 @@ pub enum ThemePref {
 pub struct Settings {
     pub lang: Lang,
     pub theme: ThemePref,
-    /// Tracked providers, indexed like `Provider`.
-    pub enabled: [bool; 3],
+    /// Tracked providers.
+    pub enabled: PerProvider<bool>,
     pub poll_minutes: u32,
     /// Poll every 2 min while a limit is above 80 %.
     pub poll_faster_when_hot: bool,
@@ -34,7 +34,7 @@ impl Default for Settings {
         Settings {
             lang: i18n::system_lang(),
             theme: ThemePref::Auto,
-            enabled: [true; 3],
+            enabled: PerProvider::from_fn(|_| true),
             poll_minutes: 5,
             poll_faster_when_hot: true,
         }
@@ -100,39 +100,45 @@ impl Settings {
         Settings {
             lang: stored.lang.unwrap_or(d.lang),
             theme: stored.theme.unwrap_or(d.theme),
-            enabled: [p.claude, p.codex, p.amp].map(|on| on.unwrap_or(true)),
+            enabled: PerProvider::from_fn(|provider| {
+                match provider {
+                    Provider::Claude => p.claude,
+                    Provider::Codex => p.codex,
+                    Provider::Amp => p.amp,
+                }
+                .unwrap_or(true)
+            }),
             poll_minutes: stored.poll_minutes.filter(|m| POLL_CHOICES.contains(m)).unwrap_or(d.poll_minutes),
             poll_faster_when_hot: stored.poll_faster_when_hot.unwrap_or(d.poll_faster_when_hot),
         }
     }
 
     fn to_json(&self) -> Vec<u8> {
-        let [claude, codex, amp] = self.enabled.map(Some);
         let stored = Stored {
             lang: Some(self.lang),
             theme: Some(self.theme),
-            providers: Some(Providers { claude, codex, amp }),
+            providers: Some(Providers {
+                claude: Some(self.enabled[Provider::Claude]),
+                codex: Some(self.enabled[Provider::Codex]),
+                amp: Some(self.enabled[Provider::Amp]),
+            }),
             poll_minutes: Some(self.poll_minutes),
             poll_faster_when_hot: Some(self.poll_faster_when_hot),
         };
         serde_json::to_vec_pretty(&stored).unwrap_or_default()
     }
-
-    pub fn is_enabled(&self, p: Provider) -> bool {
-        self.enabled[p as usize]
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Lang, Settings, ThemePref};
+    use super::{Lang, PerProvider, Provider, Settings, ThemePref};
 
     #[test]
     fn json_roundtrip() {
         let s = Settings {
             lang: Lang::En,
             theme: ThemePref::Dark,
-            enabled: [true, false, true],
+            enabled: PerProvider::from_fn(|p| p != Provider::Codex),
             poll_minutes: 10,
             poll_faster_when_hot: false,
         };
@@ -161,7 +167,7 @@ mod tests {
             br#"{"lang": "de", "theme": "neon", "providers": {"codex": false, "amp": "yes"},
                  "poll_minutes": 7, "poll_faster_when_hot": 1, "unknown": null}"#,
         );
-        assert_eq!(s, Settings { enabled: [true, false, true], ..d.clone() });
+        assert_eq!(s, Settings { enabled: PerProvider::from_fn(|p| p != Provider::Codex), ..d.clone() });
         let s = Settings::from_json(br#"{"lang": "fr", "theme": "light", "providers": 3, "poll_minutes": 2}"#);
         assert_eq!(s, Settings { lang: Lang::Fr, theme: ThemePref::Light, poll_minutes: 2, ..d });
     }

@@ -37,7 +37,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, w};
 
 use history::History;
-use model::Snapshot;
+use model::{Provider, Snapshot};
 use settings::Settings;
 use tray::{MenuChoice, Tray};
 
@@ -150,7 +150,7 @@ impl App {
         i18n::set_lang(after.lang);
         // A disabled provider disappears right away; a re-enabled one is fetched again.
         if let Some(snap) = self.snapshot.borrow_mut().as_mut() {
-            snap.usages.retain(|u| after.is_enabled(u.provider));
+            snap.usages.retain(|u| after.enabled[u.provider]);
         }
         if let Some(snap) = self.snapshot.borrow().as_ref()
             && let Some(tray) = self.tray.borrow_mut().as_mut()
@@ -158,7 +158,7 @@ impl App {
             tray.set_snapshot(snap);
         }
         self.schedule_poll();
-        if before.enabled != after.enabled && after.enabled.iter().zip(before.enabled).any(|(a, b)| *a && !b) {
+        if Provider::ALL.into_iter().any(|p| after.enabled[p] && !before.enabled[p]) {
             self.refresh(false);
         }
         popup::on_settings_changed(before.theme != after.theme);
