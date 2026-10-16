@@ -1,13 +1,11 @@
 use serde_json::Value;
 
-use super::{
-    Parsed, capitalize, config_dir, count, failed, fetch_json, read_json, resolve, unless_cooling_down, window_kind,
-};
+use super::{Ctx, Parsed, capitalize, count, failed, fetch_json, read_json, resolve, unless_cooling_down, window_kind};
 use crate::model::{BankedResets, Limit, Problem, Provider, Usage};
 use crate::timefmt::now;
 
-pub(super) fn fetch(forced: bool) -> Option<Usage> {
-    let auth = read_json(&config_dir("CODEX_HOME", ".codex").join("auth.json"))?;
+pub(super) fn fetch(ctx: &Ctx, forced: bool) -> Option<Usage> {
+    let auth = read_json(&ctx.codex_dir.join("auth.json"))?;
     let tokens = &auth["tokens"];
     let (Some(token), Some(account)) = (tokens["access_token"].as_str(), tokens["account_id"].as_str()) else {
         let problem = if auth["OPENAI_API_KEY"].is_string() {
@@ -17,11 +15,11 @@ pub(super) fn fetch(forced: bool) -> Option<Usage> {
         };
         return Some(failed(Provider::Codex, None, problem));
     };
-    let fetched = unless_cooling_down(Provider::Codex, forced, || {
+    let fetched = unless_cooling_down(ctx, Provider::Codex, forced, || {
         let bearer = format!("Bearer {token}");
         let headers =
             [("Authorization", bearer.as_str()), ("ChatGPT-Account-Id", account), ("Accept", "application/json")];
-        fetch_json(Provider::Codex, "chatgpt.com", "/backend-api/wham/usage", &headers)
+        fetch_json(ctx, Provider::Codex, "chatgpt.com", "/backend-api/wham/usage", &headers)
     });
     let parse = |json: &Value| Parsed {
         plan: json["plan_type"].as_str().map(plan),
@@ -31,7 +29,7 @@ pub(super) fn fetch(forced: bool) -> Option<Usage> {
             .map(|n| BankedResets { count: count(n), next_expiry: None }),
         credits: Vec::new(),
     };
-    Some(resolve(Provider::Codex, None, fetched, parse))
+    Some(resolve(ctx, Provider::Codex, None, fetched, parse))
 }
 
 fn plan(plan: &str) -> String {

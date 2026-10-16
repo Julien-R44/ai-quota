@@ -2,9 +2,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::{
-    Parsed, capitalize, config_dir, count, home, http_error, json_response, read_json, resolve, unless_cooling_down,
-};
+use super::{Ctx, Parsed, capitalize, count, home, http_error, json_response, read_json, resolve, unless_cooling_down};
 use crate::http;
 use crate::model::{BankedResets, Limit, LimitKind, Problem, Provider, Usage};
 use crate::timefmt::{now, parse_iso8601};
@@ -15,12 +13,12 @@ const WEEK: i64 = 7 * 86400;
 /// Claude Code's public OAuth client (the same one `CodexBar` uses).
 const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 
-pub(super) fn fetch(forced: bool) -> Option<Usage> {
-    let path = config_dir("CLAUDE_CONFIG_DIR", ".claude").join(".credentials.json");
+pub(super) fn fetch(ctx: &Ctx, forced: bool) -> Option<Usage> {
+    let path = ctx.claude_dir.join(".credentials.json");
     let creds = read_json(&path)?;
     let oauth = creds.get("claudeAiOauth")?;
-    let fetched = unless_cooling_down(Provider::Claude, forced, || {
-        let token = access_token(&path, oauth)?;
+    let fetched = unless_cooling_down(ctx, Provider::Claude, forced, || {
+        let token = access_token(ctx, &path, oauth)?;
         let auth = format!("Bearer {token}");
         let agent = user_agent();
         let headers = [
@@ -33,13 +31,13 @@ pub(super) fn fetch(forced: bool) -> Option<Usage> {
         // `cedar_ember` adds the inventory of granted resets. Like CodexBar,
         // retry without it if the server rejects this optional parameter.
         let host = "api.anthropic.com";
-        let mut response = http::get(host, "/api/oauth/usage?cedar_ember=1", &headers);
+        let mut response = ctx.http.get(host, "/api/oauth/usage?cedar_ember=1", &headers);
         if let Ok(r) = &response
             && (r.status == 400 || r.status == 403 && !String::from_utf8_lossy(&r.body).contains("user:profile"))
         {
-            response = http::get(host, "/api/oauth/usage", &headers);
+            response = ctx.http.get(host, "/api/oauth/usage", &headers);
         }
-        json_response(Provider::Claude, response).map(strip_grant_ids)
+        json_response(ctx, Provider::Claude, response).map(strip_grant_ids)
     });
     let parse = |json: &Value| Parsed {
         plan: None,
@@ -47,7 +45,7 @@ pub(super) fn fetch(forced: bool) -> Option<Usage> {
         resets: banked_resets(json, now()),
         credits: Vec::new(),
     };
-    Some(resolve(Provider::Claude, plan(oauth), fetched, parse))
+    Some(resolve(ctx, Provider::Claude, plan(oauth), fetched, parse))
 }
 
 /// Grant ids are what consumes a reset: drop them, since the response is cached on disk.
@@ -105,7 +103,7 @@ fn user_agent() -> String {
 /// Valid access token, refreshed if needed. A running Claude Code refreshes it
 /// itself a few minutes before expiry, so only take over once it has actually
 /// expired.
-fn access_token(path: &Path, oauth: &Value) -> Result<String, Problem> {
+fn access_token(ctx: &Ctx, path: &Path, oauth: &Value) -> Result<String, Problem> {
     let Some(token) = oauth["accessToken"].as_str() else {
         return Err(Problem::NotLoggedIn(Provider::Claude));
     };
@@ -120,11 +118,11 @@ fn access_token(path: &Path, oauth: &Value) -> Result<String, Problem> {
     let body = format!("grant_type=refresh_token&refresh_token={}&client_id={CLIENT_ID}", http::form_encode(refresh));
     let headers = [("Content-Type", "application/x-www-form-urlencoded"), ("Accept", "application/json")];
     let r =
-        http::post("platform.claude.com", "/v1/oauth/token", &headers, body.as_bytes()).map_err(Problem::Offline)?;
+        ctx.http.post("platform.claude.com", "/v1/oauth/token", &headers, body.as_bytes()).map_err(Problem::Offline)?;
     match r.status {
         200 => {}
         400 | 401 => return Err(Problem::SessionExpired(Provider::Claude)),
-        _ => return Err(http_error(Provider::Claude, &r)),
+        _ => return Err(http_error(ctx, Provider::Claude, &r)),
     }
     let json: Value = serde_json::from_slice(&r.body).map_err(|_| Problem::Unreadable)?;
     let access = json["access_token"].as_str().ok_or(Problem::Unreadable)?;

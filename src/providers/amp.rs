@@ -3,25 +3,19 @@ use std::sync::LazyLock;
 use regex_lite::Regex;
 use serde_json::Value;
 
-use super::{Parsed, json_response, resolve, unless_cooling_down};
+use super::{Ctx, Parsed, json_response, resolve, unless_cooling_down};
 use crate::model::{Amount, Credit, Limit, LimitKind, Problem, Provider, Usage};
 use crate::timefmt::{self, now, parse_iso8601};
-use crate::{http, secret};
 
-/// Amp access token: `AMP_API_KEY`, otherwise the one pasted in the settings.
-fn token() -> Option<String> {
-    std::env::var("AMP_API_KEY").ok().filter(|t| !t.trim().is_empty()).or_else(secret::load_amp_token)
-}
-
-pub(super) fn fetch(forced: bool) -> Option<Usage> {
-    let token = token()?;
-    let fetched = unless_cooling_down(Provider::Amp, forced, || {
+pub(super) fn fetch(ctx: &Ctx, forced: bool) -> Option<Usage> {
+    let token = ctx.amp_token.as_deref()?;
+    let fetched = unless_cooling_down(ctx, Provider::Amp, forced, || {
         let auth = format!("Bearer {token}");
         let headers =
             [("Authorization", auth.as_str()), ("Accept", "application/json"), ("Content-Type", "application/json")];
         let body = br#"{"method":"userDisplayBalanceInfo","params":{}}"#;
-        let response = http::post("ampcode.com", "/api/internal?userDisplayBalanceInfo", &headers, body);
-        let json = json_response(Provider::Amp, response)?;
+        let response = ctx.http.post("ampcode.com", "/api/internal?userDisplayBalanceInfo", &headers, body);
+        let json = json_response(ctx, Provider::Amp, response)?;
         match (json["ok"].as_bool(), json["error"]["code"].as_str()) {
             // Without the display text there is nothing to parse: do not cache it as a success.
             (Some(true), _) if json["result"]["displayText"].is_string() => Ok(json),
@@ -31,7 +25,7 @@ pub(super) fn fetch(forced: bool) -> Option<Usage> {
         }
     });
     let parse = |json: &Value| parse_amp(json["result"]["displayText"].as_str().unwrap_or_default(), now());
-    Some(resolve(Provider::Amp, None, fetched, parse))
+    Some(resolve(ctx, Provider::Amp, None, fetched, parse))
 }
 
 /// Number as displayed by Amp: `1,500`, `18.57`.

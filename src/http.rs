@@ -45,11 +45,31 @@ pub struct Response {
     pub retry_after: Option<u32>,
 }
 
-pub fn get(host: &str, path: &str, headers: &[(&str, &str)]) -> Result<Response, String> {
+/// Port: what the providers need from the network. [`WinHttp`] is the real adapter; tests plug in
+/// a fake one, so the cooldown, cache and token-refresh logic is tested without Internet.
+pub trait Http: Sync {
+    fn get(&self, host: &str, path: &str, headers: &[(&str, &str)]) -> Result<Response, String>;
+    fn post(&self, host: &str, path: &str, headers: &[(&str, &str)], body: &[u8]) -> Result<Response, String>;
+}
+
+/// The real adapter: HTTPS through `WinHTTP`.
+pub struct WinHttp;
+
+impl Http for WinHttp {
+    fn get(&self, host: &str, path: &str, headers: &[(&str, &str)]) -> Result<Response, String> {
+        get(host, path, headers)
+    }
+
+    fn post(&self, host: &str, path: &str, headers: &[(&str, &str)], body: &[u8]) -> Result<Response, String> {
+        post(host, path, headers, body)
+    }
+}
+
+fn get(host: &str, path: &str, headers: &[(&str, &str)]) -> Result<Response, String> {
     request("GET", host, path, headers, &[])
 }
 
-pub fn post(host: &str, path: &str, headers: &[(&str, &str)], body: &[u8]) -> Result<Response, String> {
+fn post(host: &str, path: &str, headers: &[(&str, &str)], body: &[u8]) -> Result<Response, String> {
     request("POST", host, path, headers, body)
 }
 
