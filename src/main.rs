@@ -1,5 +1,8 @@
 #![windows_subsystem = "windows"]
 
+//! `App` lives on the UI thread and is reached through thread-local storage, so workers cannot
+//! borrow it. `RefCell` borrows must end before calling anything that pumps window messages.
+
 mod art;
 mod history;
 mod http;
@@ -17,13 +20,20 @@ mod tray;
 
 use std::cell::{Cell, RefCell};
 use std::io::Write;
+use std::sync::mpsc::{self, Receiver};
 
-use windows::Win32::Foundation::*;
+use windows::Win32::Foundation::{
+    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, POINT, WPARAM,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Shell::{NIN_SELECT, NINF_KEY};
-use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::Win32::UI::WindowsAndMessaging::{
+    AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowW, GetMessageW,
+    GetWindowThreadProcessId, MSG, RegisterClassW, RegisterWindowMessageW, TranslateMessage, WM_APP, WM_CONTEXTMENU,
+    WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_POWERBROADCAST, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW,
+    WS_EX_TOOLWINDOW, WS_OVERLAPPED,
+};
 use windows::core::{PCWSTR, w};
 
 use history::History;
@@ -58,6 +68,8 @@ pub struct App {
     pub expanded: RefCell<Option<String>>,
     popup_closed_at: Cell<u64>,
     taskbar_created: u32,
+    // Explicitly disconnected on window destruction because App itself is process-lived.
+    data_rx: RefCell<Option<Receiver<Snapshot>>>,
 }
 
 thread_local! {
@@ -78,23 +90,32 @@ impl App {
             return;
         }
         popup::on_data();
-        let hwnd = self.hwnd.0 as isize;
+        let hwnd = self.hwnd.0 as usize;
         let enabled = self.settings.borrow().enabled;
+        let (tx, rx) = mpsc::channel();
+        *self.data_rx.borrow_mut() = Some(rx);
         let spawned = std::thread::Builder::new().stack_size(256 * 1024).spawn(move || {
-            let snap = Box::into_raw(Box::new(providers::fetch_all(forced, enabled)));
-            unsafe {
-                if PostMessageW(Some(HWND(hwnd as _)), WM_DATA, WPARAM(0), LPARAM(snap as isize)).is_err() {
-                    drop(Box::from_raw(snap));
-                }
+            if tx.send(providers::fetch_all(forced, enabled)).is_ok() {
+                sys::post_message(HWND(hwnd as _), WM_DATA);
             }
         });
         if spawned.is_err() {
+            self.data_rx.borrow_mut().take();
             self.loading.set(false);
         }
     }
 
+    fn drain_data(&self) {
+        loop {
+            // Release the borrow before updating the UI, which may dispatch more messages.
+            let snap = self.data_rx.borrow().as_ref().and_then(|rx| rx.try_recv().ok());
+            let Some(snap) = snap else { break };
+            self.on_data(snap);
+        }
+    }
+
     fn is_stale(&self, secs: i64) -> bool {
-        self.snapshot.borrow().as_ref().is_none_or(|s| timefmt::now() - s.fetched_at > secs)
+        self.snapshot.borrow().as_ref().is_none_or(|s| timefmt::now().saturating_sub(s.fetched_at) > secs)
     }
 
     fn on_data(&self, snap: Snapshot) {
@@ -113,8 +134,8 @@ impl App {
         let settings = self.settings.borrow();
         let hot =
             settings.poll_faster_when_hot && self.snapshot.borrow().as_ref().is_some_and(|s| s.max_percent() >= 80.0);
-        let ms = if hot { POLL_HOT_MS } else { settings.poll_minutes * 60 * 1000 };
-        unsafe { SetTimer(Some(self.hwnd), POLL_TIMER, ms, None) };
+        let ms = if hot { POLL_HOT_MS } else { settings.poll_minutes.saturating_mul(60_000) };
+        sys::set_timer(self.hwnd, POLL_TIMER, ms);
     }
 
     /// Changes the settings, saves them and applies them right away.
@@ -143,10 +164,10 @@ impl App {
         popup::on_settings_changed(before.theme != after.theme);
     }
 
-    /// Gives memory back to the system once worker threads (WinHTTP, Direct2D rendering) are done
+    /// Gives memory back to the system once worker threads (`WinHTTP`, `Direct2D` rendering) are done
     /// exiting.
     fn schedule_trim(&self) {
-        unsafe { SetTimer(Some(self.hwnd), TRIM_TIMER, 2_000, None) };
+        sys::set_timer(self.hwnd, TRIM_TIMER, 2_000);
     }
 
     fn toggle_popup(&self) {
@@ -154,7 +175,7 @@ impl App {
         // click from reopening it.
         if popup::is_open() {
             popup::close();
-        } else if unsafe { GetTickCount64() } - self.popup_closed_at.get() > 300 {
+        } else if sys::tick_count().saturating_sub(self.popup_closed_at.get()) > 300 {
             self.open_popup();
         }
     }
@@ -170,19 +191,17 @@ impl App {
     fn quit(&self) {
         popup::close();
         self.tray.borrow_mut().take();
-        unsafe {
-            let _ = DestroyWindow(self.hwnd);
-        }
+        sys::destroy_window(self.hwnd);
     }
 }
 
 pub fn popup_closed() {
     let app = app();
-    app.popup_closed_at.set(unsafe { GetTickCount64() });
+    app.popup_closed_at.set(sys::tick_count());
     app.schedule_trim();
 }
 
-/// With `panic = "abort"` and a windows-subsystem exe, a panic (say, a `RefCell` double borrow)
+/// With `panic = "abort"` and a Windows-subsystem exe, a panic (say, a `RefCell` double borrow)
 /// would kill the app without a trace: leave one in `%LOCALAPPDATA%\ai-quota\crash.log`.
 fn install_crash_log() {
     const MAX_LOG: u64 = 64 * 1024;
@@ -199,7 +218,7 @@ fn install_crash_log() {
                 "{} [{}] panicked at {}: {}",
                 timefmt::utc_iso8601(timefmt::now()),
                 thread.name().unwrap_or("?"),
-                info.location().map_or_else(|| "?".into(), |l| l.to_string()),
+                info.location().map_or_else(|| "?".into(), ToString::to_string),
                 info.payload_as_str().unwrap_or("?"),
             );
         }
@@ -208,19 +227,85 @@ fn install_crash_log() {
 
 fn main() {
     install_crash_log();
-    unsafe {
-        // Single instance: a second launch just opens the first one's popup.
-        let _mutex = CreateMutexW(None, true, w!("Local\\ai-quota-single-instance"));
-        if GetLastError() == ERROR_ALREADY_EXISTS {
-            if let Ok(existing) = FindWindowW(CLASS, None) {
-                let mut pid = 0;
-                GetWindowThreadProcessId(existing, Some(&mut pid));
-                let _ = AllowSetForegroundWindow(pid);
-                let _ = PostMessageW(Some(existing), WM_OPEN_POPUP, WPARAM(0), LPARAM(0));
-            }
-            return;
-        }
+    let Some(_instance) = acquire_instance() else { return };
+    let Some(hwnd) = create_host_window() else { return };
+    let settings = Settings::load();
+    i18n::set_lang(settings.lang);
+    // SAFETY: The message name is a static NUL-terminated string.
+    let taskbar_created = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
+    let app = Box::leak(Box::new(App {
+        hwnd,
+        tray: RefCell::new(None),
+        snapshot: RefCell::new(None),
+        loading: Cell::new(false),
+        history: RefCell::new(History::load()),
+        settings: RefCell::new(settings),
+        expanded: RefCell::new(None),
+        popup_closed_at: Cell::new(0),
+        taskbar_created,
+        data_rx: RefCell::new(None),
+    }));
+    APP.set(Some(app));
 
+    sys::enable_dark_menus(hwnd);
+    *app.tray.borrow_mut() = Some(Tray::new(hwnd, WM_TRAY));
+    app.refresh(false);
+    if std::env::args().any(|a| a == "--open") {
+        sys::post_message(hwnd, WM_OPEN_POPUP);
+    }
+    run_message_loop();
+    // Also disconnect on a GetMessageW error, without relying on WM_DESTROY being dispatched.
+    app.data_rx.borrow_mut().take();
+}
+
+struct InstanceMutex(Option<HANDLE>);
+
+impl Drop for InstanceMutex {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0 {
+            // SAFETY: This is the uniquely owned handle returned by CreateMutexW, closed once
+            // after the message loop exits. Windows destroys the mutex after its last handle closes.
+            unsafe {
+                let _ = CloseHandle(handle);
+            }
+        }
+    }
+}
+
+fn acquire_instance() -> Option<InstanceMutex> {
+    // SAFETY: The mutex has default security and a static NUL-terminated name. Its successful
+    // handle is owned by the guard. GetLastError is read before any other Windows API call.
+    let (mutex, already_exists) = unsafe {
+        let mutex = CreateMutexW(None, true, w!("Local\\ai-quota-single-instance"));
+        (mutex, GetLastError() == ERROR_ALREADY_EXISTS)
+    };
+    let mutex = InstanceMutex(mutex.ok());
+    if already_exists {
+        open_existing_instance();
+        None
+    } else {
+        Some(mutex)
+    }
+}
+
+fn open_existing_instance() {
+    // SAFETY: CLASS is NUL-terminated, pid is writable, and the post carries no pointers. Windows
+    // validates the other process's window if it exits between lookup and posting.
+    unsafe {
+        if let Ok(existing) = FindWindowW(CLASS, None) {
+            let mut pid = 0;
+            GetWindowThreadProcessId(existing, Some(&raw mut pid));
+            let _ = AllowSetForegroundWindow(pid);
+            sys::post_message(existing, WM_OPEN_POPUP);
+        }
+    }
+}
+
+fn create_host_window() -> Option<HWND> {
+    // SAFETY: The module stays loaded for the process lifetime. class and all string literals
+    // live through registration/creation; wndproc has the required system ABI. Window creation
+    // and all subsequent dispatch happen on this UI thread.
+    unsafe {
         let instance = GetModuleHandleW(None).unwrap_or_default();
         let class = WNDCLASSW {
             lpfnWndProc: Some(wndproc),
@@ -228,8 +313,8 @@ fn main() {
             lpszClassName: CLASS,
             ..Default::default()
         };
-        RegisterClassW(&class);
-        let Ok(hwnd) = CreateWindowExW(
+        RegisterClassW(&raw const class);
+        CreateWindowExW(
             WS_EX_TOOLWINDOW,
             CLASS,
             w!("AI Quota"),
@@ -242,137 +327,126 @@ fn main() {
             None,
             Some(instance.into()),
             None,
-        ) else {
-            return;
-        };
+        )
+        .ok()
+    }
+}
 
-        let settings = Settings::load();
-        i18n::set_lang(settings.lang);
-        let app = Box::leak(Box::new(App {
-            hwnd,
-            tray: RefCell::new(None),
-            snapshot: RefCell::new(None),
-            loading: Cell::new(false),
-            history: RefCell::new(History::load()),
-            settings: RefCell::new(settings),
-            expanded: RefCell::new(None),
-            popup_closed_at: Cell::new(0),
-            taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
-        }));
-        APP.set(Some(app));
-
-        sys::enable_dark_menus(hwnd);
-        *app.tray.borrow_mut() = Some(Tray::new(hwnd, WM_TRAY));
-        app.refresh(false);
-
-        if std::env::args().any(|a| a == "--open") {
-            let _ = PostMessageW(Some(hwnd), WM_OPEN_POPUP, WPARAM(0), LPARAM(0));
-        }
-
-        let mut msg = MSG::default();
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+fn run_message_loop() {
+    let mut msg = MSG::default();
+    // SAFETY: msg is a writable MSG allocation. Only a positive GetMessageW result is dispatched,
+    // on this UI thread, with no App RefCell borrow held across dispatch or retrieval.
+    unsafe {
+        while GetMessageW(&raw mut msg, None, 0, 0).0 > 0 {
+            let _ = TranslateMessage(&raw const msg);
+            DispatchMessageW(&raw const msg);
         }
     }
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    unsafe {
-        // Messages sent while the window is being created, before `App` exists.
-        let Some(app) = APP.get() else { return DefWindowProcW(hwnd, msg, wparam, lparam) };
-        match msg {
-            WM_TRAY => {
-                match (lparam.0 & 0xFFFF) as u32 {
-                    NIN_SELECT | NIN_KEYSELECT => app.toggle_popup(),
-                    WM_CONTEXTMENU => {
-                        popup::close();
-                        let at = POINT {
-                            x: (wparam.0 & 0xFFFF) as i16 as i32,
-                            y: ((wparam.0 >> 16) & 0xFFFF) as i16 as i32,
-                        };
-                        match tray::show_menu(hwnd, at, sys::autostart_enabled()) {
-                            Some(MenuChoice::Refresh) => app.refresh(true),
-                            Some(MenuChoice::ToggleAutostart) => sys::set_autostart(!sys::autostart_enabled()),
-                            Some(MenuChoice::Settings) => {
-                                app.open_popup();
-                                popup::show_settings();
-                            }
-                            Some(MenuChoice::Quit) => app.quit(),
-                            None => {}
+    // Messages sent while the window is being created, before `App` exists.
+    let Some(app) = APP.get() else { return default_window_proc(hwnd, msg, wparam, lparam) };
+    match msg {
+        WM_TRAY => {
+            match (lparam.0 & 0xFFFF) as u32 {
+                NIN_SELECT | NIN_KEYSELECT => app.toggle_popup(),
+                WM_CONTEXTMENU => {
+                    popup::close();
+                    let at = POINT {
+                        x: i32::from((wparam.0 & 0xFFFF) as i16),
+                        y: i32::from(((wparam.0 >> 16) & 0xFFFF) as i16),
+                    };
+                    match tray::show_menu(hwnd, at, sys::autostart_enabled()) {
+                        Some(MenuChoice::Refresh) => app.refresh(true),
+                        Some(MenuChoice::ToggleAutostart) => sys::set_autostart(!sys::autostart_enabled()),
+                        Some(MenuChoice::Settings) => {
+                            app.open_popup();
+                            popup::show_settings();
                         }
+                        Some(MenuChoice::Quit) => app.quit(),
+                        None => {}
                     }
-                    _ => {}
                 }
-                LRESULT(0)
+                _ => {}
             }
-            WM_DATA => {
-                let snap = Box::from_raw(lparam.0 as *mut Snapshot);
-                app.on_data(*snap);
-                LRESULT(0)
-            }
-            WM_OPEN_POPUP => {
-                if !popup::is_open() {
-                    app.open_popup();
-                }
-                LRESULT(0)
-            }
-            WM_TIMER => {
-                match wparam.0 {
-                    // Keep polling while the session is locked: cloud tasks consume the quota and the
-                    // history must see them (one GET every 5 min).
-                    POLL_TIMER => app.refresh(false),
-                    RESUME_TIMER => {
-                        let _ = KillTimer(Some(hwnd), RESUME_TIMER);
-                        app.refresh(false);
-                    }
-                    TRIM_TIMER => {
-                        let _ = KillTimer(Some(hwnd), TRIM_TIMER);
-                        if !popup::is_open() {
-                            sys::trim_memory();
-                        }
-                    }
-                    _ => {}
-                }
-                LRESULT(0)
-            }
-            WM_POWERBROADCAST => {
-                if wparam.0 == PBT_APMRESUMEAUTOMATIC {
-                    // let the network come back first
-                    SetTimer(Some(hwnd), RESUME_TIMER, 5_000, None);
-                }
-                LRESULT(1)
-            }
-            WM_SETTINGCHANGE => {
-                let area = PCWSTR(lparam.0 as *const u16);
-                if !area.is_null() && area.to_string().is_ok_and(|s| s == "ImmersiveColorSet") {
-                    if let Some(tray) = app.tray.borrow_mut().as_mut() {
-                        tray.refresh_icon();
-                    }
-                    sys::flush_menu_themes();
-                    popup::on_theme_changed();
-                }
-                LRESULT(0)
-            }
-            WM_DISPLAYCHANGE | WM_DPICHANGED => {
-                if let Some(tray) = app.tray.borrow_mut().as_mut() {
-                    tray.refresh_icon();
-                }
-                LRESULT(0)
-            }
-            WM_DESTROY => {
-                PostQuitMessage(0);
-                LRESULT(0)
-            }
-            m if m == app.taskbar_created && m != 0 => {
-                // Explorer restarted: register the icon again.
-                if let Some(tray) = app.tray.borrow_mut().as_mut() {
-                    tray.add(WM_TRAY);
-                    tray.refresh_icon();
-                }
-                LRESULT(0)
-            }
-            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+            LRESULT(0)
         }
+        WM_DATA => {
+            app.drain_data();
+            LRESULT(0)
+        }
+        WM_OPEN_POPUP => {
+            if !popup::is_open() {
+                app.open_popup();
+            }
+            LRESULT(0)
+        }
+        WM_TIMER => {
+            match wparam.0 {
+                // Keep polling while the session is locked: cloud tasks consume the quota and the
+                // history must see them (one GET every 5 min).
+                POLL_TIMER => app.refresh(false),
+                RESUME_TIMER => {
+                    sys::kill_timer(hwnd, RESUME_TIMER);
+                    app.refresh(false);
+                }
+                TRIM_TIMER => {
+                    sys::kill_timer(hwnd, TRIM_TIMER);
+                    if !popup::is_open() {
+                        sys::trim_memory();
+                    }
+                }
+                _ => {}
+            }
+            LRESULT(0)
+        }
+        WM_POWERBROADCAST => {
+            if wparam.0 == PBT_APMRESUMEAUTOMATIC {
+                // let the network come back first
+                sys::set_timer(hwnd, RESUME_TIMER, 5_000);
+            }
+            LRESULT(1)
+        }
+        WM_SETTINGCHANGE => {
+            let area = PCWSTR(lparam.0 as *const u16);
+            // SAFETY: For WM_SETTINGCHANGE, Windows supplies a NUL-terminated area string
+            // valid for the duration of this callback, or a null pointer.
+            let theme_changed = !area.is_null() && unsafe { area.to_string() }.is_ok_and(|s| s == "ImmersiveColorSet");
+            if theme_changed {
+                if let Some(tray) = app.tray.borrow_mut().as_mut() {
+                    tray.refresh_icon();
+                }
+                sys::flush_menu_themes();
+                popup::on_theme_changed();
+            }
+            LRESULT(0)
+        }
+        WM_DISPLAYCHANGE | WM_DPICHANGED => {
+            if let Some(tray) = app.tray.borrow_mut().as_mut() {
+                tray.refresh_icon();
+            }
+            LRESULT(0)
+        }
+        WM_DESTROY => {
+            app.data_rx.borrow_mut().take();
+            APP.set(None);
+            sys::post_quit();
+            LRESULT(0)
+        }
+        m if m == app.taskbar_created && m != 0 => {
+            // Explorer restarted: register the icon again.
+            if let Some(tray) = app.tray.borrow_mut().as_mut() {
+                tray.add(WM_TRAY);
+                tray.refresh_icon();
+            }
+            LRESULT(0)
+        }
+        _ => default_window_proc(hwnd, msg, wparam, lparam),
     }
+}
+
+fn default_window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // SAFETY: Only called from wndproc with the unchanged parameters supplied by Windows.
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }

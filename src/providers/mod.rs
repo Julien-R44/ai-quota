@@ -39,7 +39,7 @@ fn home() -> PathBuf {
 }
 
 fn config_dir(env: &str, default: &str) -> PathBuf {
-    std::env::var_os(env).map(PathBuf::from).unwrap_or_else(|| home().join(default))
+    std::env::var_os(env).map_or_else(|| home().join(default), PathBuf::from)
 }
 
 fn read_json(path: &Path) -> Option<Value> {

@@ -5,6 +5,7 @@
 //! atomically.
 
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::path::PathBuf;
 
 use crate::model::{Snapshot, Status};
@@ -53,7 +54,7 @@ impl History {
         let mut out = String::new();
         for (key, samples) in &self.series {
             for s in samples {
-                out.push_str(&format!("{key}\t{}\t{}\t{}\n", s.ts, s.percent, u8::from(s.gap)));
+                let _ = writeln!(out, "{key}\t{}\t{}\t{}", s.ts, s.percent, u8::from(s.gap));
             }
         }
         let _ = std::fs::create_dir_all(path.parent().unwrap_or(&path));
@@ -103,6 +104,8 @@ impl History {
 }
 
 /// On a contiguous plateau (same value, no gap), moves the last point instead of adding one.
+// Only exactly equal API values form a plateau; an epsilon would hide real usage changes.
+#[allow(clippy::float_cmp)]
 fn push_sample(samples: &mut Vec<Sample>, ts: i64, percent: f32) -> bool {
     match samples.as_mut_slice() {
         [.., b] if b.ts >= ts => return false,
@@ -153,7 +156,7 @@ pub fn project(samples: &[Sample], start: i64, reset: i64) -> Option<Projection>
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Sample, project, push_sample};
 
     #[test]
     fn compresses_plateaus_but_keeps_gaps() {

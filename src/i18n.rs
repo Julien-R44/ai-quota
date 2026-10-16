@@ -19,12 +19,13 @@ pub fn lang() -> Lang {
 }
 
 pub fn set_lang(l: Lang) {
-    LANG.store(if l == Lang::En { 1 } else { 0 }, Ordering::Relaxed);
+    LANG.store(u8::from(l == Lang::En), Ordering::Relaxed);
 }
 
 /// French if the Windows UI language is French, English otherwise.
 pub fn system_lang() -> Lang {
     const LANG_FRENCH: u16 = 0x0C;
+    // SAFETY: This API takes no pointers or handles and has no preconditions.
     if unsafe { GetUserDefaultUILanguage() } & 0x3FF == LANG_FRENCH { Lang::Fr } else { Lang::En }
 }
 
@@ -61,6 +62,8 @@ impl LangGuard {
         LangGuard { previous, _lock: lock }
     }
 
+    // Holding self keeps the language-test lock alive while the global language is changed.
+    #[allow(clippy::unused_self)]
     pub fn set(&self, l: Lang) {
         set_lang(l);
     }

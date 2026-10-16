@@ -2,8 +2,14 @@
 //! language (M L H V C S Q T A Z, absolute and relative), enough to draw crisp vector logos at any
 //! size.
 
-use windows::Win32::Graphics::Direct2D::Common::*;
-use windows::Win32::Graphics::Direct2D::*;
+use windows::Win32::Graphics::Direct2D::Common::{
+    D2D_SIZE_F, D2D1_BEZIER_SEGMENT, D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED, D2D1_FILL_MODE_ALTERNATE,
+    D2D1_FILL_MODE_WINDING,
+};
+use windows::Win32::Graphics::Direct2D::{
+    D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL, D2D1_QUADRATIC_BEZIER_SEGMENT,
+    D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, ID2D1Factory, ID2D1PathGeometry,
+};
 use windows::core::Result;
 use windows_numerics::Vector2;
 
@@ -74,6 +80,9 @@ fn v(x: f32, y: f32) -> Vector2 {
 
 /// Builds the path geometry, in the original `viewBox` coordinates.
 pub fn geometry(factory: &ID2D1Factory, d: &str, even_odd: bool) -> Result<ID2D1PathGeometry> {
+    // SAFETY: factory is a live COM interface on the calling render thread. The path owns its
+    // sink until Close; BeginFigure/EndFigure are paired, and segment structs live through each
+    // synchronous call. No pointers to parser data are retained by Direct2D.
     unsafe {
         let path = factory.CreatePathGeometry()?;
         let sink = path.Open()?;
@@ -200,7 +209,7 @@ pub fn geometry(factory: &ID2D1Factory, d: &str, even_odd: bool) -> Result<ID2D1
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::Tokens;
 
     #[test]
     fn tokenizes_compact_numbers_and_flags() {

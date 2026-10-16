@@ -10,7 +10,7 @@ use windows::Win32::System::Time::{
 use crate::i18n::{Lang, lang, tr};
 
 pub fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
 /// Days since 1970-01-01 (Howard Hinnant's algorithm).
@@ -79,10 +79,10 @@ fn system_time(ts: i64) -> SYSTEMTIME {
 }
 
 fn unix_time(t: &SYSTEMTIME) -> i64 {
-    days_from_civil(t.wYear as i64, t.wMonth as i64, t.wDay as i64) * 86400
-        + t.wHour as i64 * 3600
-        + t.wMinute as i64 * 60
-        + t.wSecond as i64
+    days_from_civil(i64::from(t.wYear), i64::from(t.wMonth), i64::from(t.wDay)) * 86400
+        + i64::from(t.wHour) * 3600
+        + i64::from(t.wMinute) * 60
+        + i64::from(t.wSecond)
 }
 
 /// Used if the zone is missing from the registry: standard time, UTC-5.
@@ -95,7 +95,8 @@ fn eastern_zone() -> Option<&'static DYNAMIC_TIME_ZONE_INFORMATION> {
         (0..)
             .map_while(|i| {
                 let mut zone = DYNAMIC_TIME_ZONE_INFORMATION::default();
-                (unsafe { EnumDynamicTimeZoneInformation(i, &mut zone) } == 0).then_some(zone)
+                // SAFETY: zone is a writable, initialized output struct; the API validates i.
+                (unsafe { EnumDynamicTimeZoneInformation(i, &raw mut zone) } == 0).then_some(zone)
             })
             .find(|z| {
                 z.TimeZoneKeyName.iter().take_while(|&&c| c != 0).copied().eq("Eastern Standard Time".encode_utf16())
@@ -109,21 +110,25 @@ pub fn next_new_york_time(now: i64, hour: i64) -> i64 {
     let zone = eastern_zone();
     let to_local = |ts: i64| {
         let mut local = SYSTEMTIME::default();
-        match zone {
-            Some(z) if unsafe { SystemTimeToTzSpecificLocalTimeEx(Some(z), &system_time(ts), &mut local) }.is_ok() => {
-                unix_time(&local)
+        if let Some(z) = zone {
+            // SAFETY: z comes from successful zone enumeration; both SYSTEMTIME allocations
+            // stay live for this synchronous call. Unsupported dates return an error.
+            if unsafe { SystemTimeToTzSpecificLocalTimeEx(Some(z), &system_time(ts), &raw mut local) }.is_ok() {
+                return unix_time(&local);
             }
-            _ => ts + NEW_YORK_FALLBACK,
         }
+        ts.saturating_add(NEW_YORK_FALLBACK)
     };
     let to_utc = |local: i64| {
         let mut utc = SYSTEMTIME::default();
-        match zone {
-            Some(z) if unsafe { TzSpecificLocalTimeToSystemTimeEx(Some(z), &system_time(local), &mut utc) }.is_ok() => {
-                unix_time(&utc)
+        if let Some(z) = zone {
+            // SAFETY: z comes from successful zone enumeration; both SYSTEMTIME allocations
+            // stay live for this synchronous call. Unsupported dates return an error.
+            if unsafe { TzSpecificLocalTimeToSystemTimeEx(Some(z), &system_time(local), &raw mut utc) }.is_ok() {
+                return unix_time(&utc);
             }
-            _ => local - NEW_YORK_FALLBACK,
         }
+        local.saturating_sub(NEW_YORK_FALLBACK)
     };
     // Each candidate day is converted on its own: tomorrow may be across a DST change.
     let today = to_local(now).div_euclid(86400);
@@ -140,8 +145,10 @@ struct LocalTime {
 
 fn local_time(ts: i64) -> Option<LocalTime> {
     let mut local = SYSTEMTIME::default();
-    unsafe { SystemTimeToTzSpecificLocalTime(None, &system_time(ts), &mut local).ok()? };
-    let days = days_from_civil(local.wYear as i64, local.wMonth as i64, local.wDay as i64);
+    // SAFETY: Input and output are distinct, initialized SYSTEMTIME allocations. A null zone
+    // selects the current system zone; invalid dates are reported as an error.
+    unsafe { SystemTimeToTzSpecificLocalTime(None, &system_time(ts), &raw mut local).ok()? };
+    let days = days_from_civil(i64::from(local.wYear), i64::from(local.wMonth), i64::from(local.wDay));
     Some(LocalTime {
         // 1970-01-01 was a Thursday
         weekday: (days + 3).rem_euclid(7) as usize,
@@ -275,8 +282,11 @@ pub fn age_text(ts: i64, now: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::i18n::LangGuard;
+    use super::{
+        age_text, civil_from_days, days_from_civil, next_new_york_time, parse_iso8601, renewal_text, reset_text,
+        utc_iso8601,
+    };
+    use crate::i18n::{Lang, LangGuard};
 
     #[test]
     fn parses_iso() {
