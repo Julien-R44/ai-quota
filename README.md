@@ -2,11 +2,7 @@
 
 A Windows tray app that shows your **Claude Code**, **Codex**, and **Amp** usage limits. Click the tray icon to open a Windows 11 flyout.
 
-<p>
-  <img src="docs/popup.png" width="300" alt="Flyout with Claude Code, Codex, and Amp limits">
-  <img src="docs/chart.png" width="300" alt="Session limit expanded into a usage chart">
-  <img src="docs/settings.png" width="300" alt="Settings view">
-</p>
+![The flyout, a session limit expanded into its usage chart, and the settings view](docs/screenshot.png)
 
 ## Features
 
