@@ -7,12 +7,15 @@ license = "MIT"
 
 [dependencies]
 regex-lite = "0.1.9"
+serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 windows-numerics = "0.3"
+windows-registry = "0.6"
 
 [dependencies.windows]
 version = "0.62"
 features = [
+    "Wdk_System_SystemServices",
     "Win32_Foundation",
     "Win32_Graphics_Direct2D",
     "Win32_Graphics_Direct2D_Common",
