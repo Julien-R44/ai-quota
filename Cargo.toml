@@ -2,7 +2,7 @@
 name = "ai-quota"
 version = "0.1.0"
 edition = "2024"
-description = "Tes quotas Claude Code et Codex dans le tray Windows, pour trois fois rien en RAM."
+description = "Claude Code, Codex, and Amp usage limits in the Windows tray, for almost no memory."
 license = "MIT"
 
 [dependencies]
