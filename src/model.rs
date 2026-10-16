@@ -45,41 +45,38 @@ impl Provider {
     }
 }
 
-/// Nature d'une fenêtre de limite. Le libellé est calculé à l'affichage,
-/// dans la langue du moment.
+/// Kind of limit window. The label is computed at display time, in the current language.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LimitKind {
     Session {
         hours: i64,
     },
     Weekly,
-    /// Limite hebdomadaire propre à un modèle (« Fable », « Opus »…).
+    /// Per-model weekly limit ("Fable", "Opus"…).
     WeeklyModel(String),
     Days(i64),
-    /// Quota gratuit quotidien d'Amp.
+    /// Amp's daily free quota.
     AmpFree,
-    /// Budget Agent mensuel d'Amp.
+    /// Amp's monthly Agent budget.
     AmpAgent,
-    /// Heures d'Orbs mensuelles d'Amp, comptées dans une taille d'instance
-    /// (« a1.small », « a1.xxlarge »…).
+    /// Amp's monthly Orbs hours, counted per instance size ("a1.small", "a1.xxlarge"…).
     AmpOrbs(String),
     Other(String),
 }
 
-/// Quantité restante d'une limite exprimée en dollars ou en heures.
+/// Amount left on a limit counted in dollars or hours.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Amount {
     Dollars { left: f64, total: f64 },
     Hours { left: f64, total: f64 },
 }
 
-/// Nombre avec séparateur de milliers : « 1 000,5 » / « 1,000.5 ».
+/// Number with thousands separators: "1 000,5" / "1,000.5".
 fn grouped(v: f64, decimals: usize) -> String {
     let text = format!("{v:.decimals$}");
     let (int, frac) = text.split_once('.').map_or((text.as_str(), None), |(i, f)| (i, Some(f)));
     let (sep, point) = match lang() {
-        // Espace insécable : l'espace fine (U+202F) disparaît entre deux chiffres
-        // dans Segoe UI à petite taille.
+        // No-break space: the narrow one (U+202F) vanishes between digits in Segoe UI at small sizes.
         Lang::Fr => ('\u{a0}', ','),
         Lang::En => (',', '.'),
     };
@@ -98,7 +95,7 @@ fn grouped(v: f64, decimals: usize) -> String {
     out
 }
 
-/// « 18,57 $ » / « $18.57 »
+/// "18,57 $" / "$18.57"
 pub fn dollars(v: f64) -> String {
     let text = grouped(v, if v.fract().abs() < 0.005 { 0 } else { 2 });
     match lang() {
@@ -108,8 +105,8 @@ pub fn dollars(v: f64) -> String {
 }
 
 impl Amount {
-    /// « 18,57 $ / 20 $ », « 732 h / 750 h » (heures d'Orbs arrondies vers le
-    /// bas, « < 1 h » en dessous, comme Amp et CodexBar).
+    /// "18,57 $ / 20 $", "732 h / 750 h". Orbs hours are rounded down, with "< 1 h" below one hour,
+    /// as Amp and CodexBar do.
     pub fn text(&self) -> String {
         let hours = |v: f64| match (lang(), v) {
             (Lang::Fr, v) if v > 0.0 && v < 1.0 => "<\u{a0}1\u{a0}h".to_string(),
@@ -126,16 +123,15 @@ impl Amount {
 
 #[derive(Clone, Debug)]
 pub struct Limit {
-    /// Identifiant stable de la fenêtre (`claude.session`, `codex.604800`…),
-    /// clé de l'historique.
+    /// Stable window id (`claude.session`, `codex.604800`…), used as the history key.
     pub key: String,
     pub kind: LimitKind,
     pub percent: f32,
-    /// Restant / total, quand la limite est en dollars ou en heures.
+    /// Left / total, when the limit is in dollars or hours.
     pub amount: Option<Amount>,
-    /// Timestamp Unix (secondes) de la réinitialisation.
+    /// Unix timestamp (seconds) of the reset.
     pub resets_at: Option<i64>,
-    /// Durée de la fenêtre glissante, pour situer le rythme de consommation.
+    /// Length of the rolling window, to gauge the consumption pace.
     pub window_secs: Option<i64>,
 }
 
@@ -159,7 +155,7 @@ impl Limit {
         }
     }
 
-    /// Libellé court, pour le tooltip du tray.
+    /// Short label, for the tray tooltip.
     pub fn short(&self) -> String {
         let fr = lang() == Lang::Fr;
         match &self.kind {
@@ -176,8 +172,7 @@ impl Limit {
         }
     }
 
-    /// Part de la fenêtre déjà écoulée (0..1) : en consommant à rythme
-    /// constant, on en serait là.
+    /// Fraction of the window already elapsed (0..1): where usage would be at a constant pace.
     pub fn pace(&self, now: i64) -> Option<f32> {
         let (at, window) = (self.resets_at?, self.window_secs?);
         let p = 1.0 - (at - now) as f32 / window as f32;
@@ -185,11 +180,11 @@ impl Limit {
     }
 }
 
-/// Ce qui empêche d'afficher les quotas d'un provider.
+/// What prevents showing a provider's quotas.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Problem {
     NotLoggedIn(Provider),
-    /// Codex connecté par clé API : pas de quota d'abonnement.
+    /// Codex signed in with an API key: no subscription quota.
     ApiKeyOnly,
     SessionExpired(Provider),
     RateLimited {
@@ -199,12 +194,12 @@ pub enum Problem {
     ServerError(u32),
     Unexpected(u32),
     Unreadable,
-    /// Message d'erreur renvoyé tel quel par le service.
+    /// Error message returned verbatim by the service.
     Message(String),
 }
 
 impl Problem {
-    /// Panne passagère : on garde alors les dernières données connues.
+    /// Temporary outage: the last known data is kept meanwhile.
     pub fn is_transient(&self) -> bool {
         !matches!(self, Problem::NotLoggedIn(_) | Problem::ApiKeyOnly | Problem::SessionExpired(_))
     }
@@ -248,15 +243,15 @@ pub enum Status {
     Error(Problem),
 }
 
-/// Resets de limite offerts et pas encore utilisés (« Reset for free »).
+/// Granted limit resets not used yet ("Reset for free").
 #[derive(Clone, Debug, PartialEq)]
 pub struct BankedResets {
     pub count: u32,
-    /// Expiration du prochain à expirer, si connue.
+    /// Expiry of the next one to expire, if known.
     pub next_expiry: Option<i64>,
 }
 
-/// Solde de crédits payants (Amp) : personnel ou d'un workspace.
+/// Paid credit balance (Amp): personal or a workspace's.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Credit {
     pub workspace: Option<String>,
@@ -270,7 +265,7 @@ pub struct Usage {
     pub status: Status,
     pub resets: Option<BankedResets>,
     pub credits: Vec<Credit>,
-    /// Données conservées d'un fetch précédent (timestamp de ce fetch).
+    /// Data kept from a previous fetch (that fetch's timestamp).
     pub stale_since: Option<i64>,
 }
 
@@ -295,14 +290,14 @@ impl Snapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::i18n::set_lang;
+    use crate::i18n::LangGuard;
 
     #[test]
     fn formats_amounts_with_thousands() {
-        set_lang(Lang::En);
+        let lang = LangGuard::new(Lang::En);
         assert_eq!(dollars(1234.5), "$1,234.50");
         assert_eq!(Amount::Hours { left: 991.9, total: 1000.0 }.text(), "991h / 1,000h");
-        set_lang(Lang::Fr);
+        lang.set(Lang::Fr);
         assert_eq!(dollars(200.0), "200\u{a0}$");
         assert_eq!(dollars(1234.5), "1\u{a0}234,50\u{a0}$");
     }

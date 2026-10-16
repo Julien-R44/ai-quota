@@ -38,7 +38,7 @@ impl Tray {
         nid
     }
 
-    /// (Ré)inscrit l'icône, y compris après un redémarrage d'Explorer.
+    /// (Re)registers the icon, including after an Explorer restart.
     pub fn add(&self, callback: u32) {
         let mut nid = self.data();
         nid.uFlags |= NIF_MESSAGE;
@@ -50,7 +50,7 @@ impl Tray {
         }
     }
 
-    /// Thème ou DPI changé : on redessine l'icône.
+    /// Theme or DPI changed: redraw the icon.
     pub fn refresh_icon(&mut self) {
         let old = self.icon;
         self.icon = make_icon(self.hwnd);
@@ -102,7 +102,7 @@ impl Drop for Tray {
     }
 }
 
-/// Icône monochrome rendue à la taille exacte demandée par le DPI du tray.
+/// Monochrome icon rendered at the exact size the tray DPI asks for.
 fn make_icon(hwnd: HWND) -> HICON {
     unsafe {
         let dpi = GetDpiForWindow(hwnd).max(96);

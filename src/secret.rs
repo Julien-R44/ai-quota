@@ -1,5 +1,5 @@
-//! Token Amp : collé depuis le presse-papiers, chiffré avec DPAPI (lié à la
-//! session Windows de l'utilisateur) dans `%LOCALAPPDATA%\ai-quota\amp.token`.
+//! Amp token: pasted from the clipboard, encrypted with DPAPI (bound to the user's Windows session)
+//! in `%LOCALAPPDATA%\ai-quota\amp.token`.
 
 use std::path::PathBuf;
 
@@ -8,7 +8,7 @@ use windows::Win32::Security::Cryptography::{
     CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
 };
 use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
-use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 use windows::core::w;
 
 const CF_UNICODETEXT: u32 = 13;
@@ -21,7 +21,7 @@ fn blob(data: &[u8]) -> CRYPT_INTEGER_BLOB {
     CRYPT_INTEGER_BLOB { cbData: data.len() as u32, pbData: data.as_ptr() as *mut u8 }
 }
 
-/// Copie le blob alloué par DPAPI puis le libère.
+/// Copies the DPAPI-allocated blob, then frees it.
 unsafe fn take(out: CRYPT_INTEGER_BLOB) -> Vec<u8> {
     unsafe {
         let bytes = std::slice::from_raw_parts(out.pbData, out.cbData as usize).to_vec();
@@ -30,7 +30,6 @@ unsafe fn take(out: CRYPT_INTEGER_BLOB) -> Vec<u8> {
     }
 }
 
-/// Chiffre avec la clé de la session Windows (DPAPI).
 fn protect(data: &[u8]) -> Option<Vec<u8>> {
     let mut out = CRYPT_INTEGER_BLOB::default();
     unsafe {
@@ -68,19 +67,20 @@ pub fn clear_amp_token() {
     }
 }
 
-/// Texte du presse-papiers, s'il y en a.
 pub fn clipboard_text() -> Option<String> {
     unsafe {
         OpenClipboard(None).ok()?;
         let text = (|| {
-            let handle = GetClipboardData(CF_UNICODETEXT).ok()?;
-            let global = HGLOBAL(handle.0);
+            let global = HGLOBAL(GetClipboardData(CF_UNICODETEXT).ok()?.0);
             let ptr = GlobalLock(global) as *const u16;
             if ptr.is_null() {
                 return None;
             }
-            let len = (0..).take_while(|&i| *ptr.add(i) != 0).count();
-            let text = String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len));
+            // Should be NUL-terminated, but another app may have put anything there: never read
+            // past the allocation.
+            let units = std::slice::from_raw_parts(ptr, GlobalSize(global) / 2);
+            let len = units.iter().position(|&c| c == 0).unwrap_or(units.len());
+            let text = String::from_utf16_lossy(&units[..len]);
             let _ = GlobalUnlock(global);
             Some(text)
         })();

@@ -21,7 +21,7 @@ fn main() {
     embed_resource::compile(&rc, embed_resource::NONE).manifest_required().unwrap();
 }
 
-/// Fichier .ico multi-tailles (entrées BMP 32 bits).
+/// Multi-size .ico file (32-bit BMP entries).
 fn build_ico() -> Vec<u8> {
     let images: Vec<Vec<u8>> = ICON_SIZES.iter().map(|&s| ico_bitmap(s)).collect();
     let mut buf = Vec::new();
@@ -54,7 +54,7 @@ fn ico_bitmap(size: u32) -> Vec<u8> {
     for v in [0u32, size * size * 4 + mask_row * size, 0, 0, 0, 0] {
         buf.extend_from_slice(&v.to_le_bytes());
     }
-    // lignes de bas en haut, en BGRA
+    // rows bottom-up, in BGRA
     for row in (0..size).rev() {
         for px in &pixels[(row * size) as usize..((row + 1) * size) as usize] {
             buf.extend_from_slice(&[px[2], px[1], px[0], px[3]]);

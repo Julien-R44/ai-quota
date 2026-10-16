@@ -1,25 +1,24 @@
-//! Historique des relevés d'usage, pour les courbes et la projection.
+//! Usage sample history, for the charts and the projection.
 //!
-//! Les relevés viennent de l'API d'usage du compte : ils incluent donc tout ce
-//! qui consomme le quota (CLI local, tâches cloud, web). Stockage : un petit
-//! fichier TSV dans `%LOCALAPPDATA%\ai-quota`, réécrit atomiquement.
+//! Samples come from the account usage API, so they include everything that consumes the quota
+//! (local CLI, cloud tasks, web). Stored as a small TSV file in `%LOCALAPPDATA%\ai-quota`, rewritten
+//! atomically.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::model::{Snapshot, Status};
 
-/// On garde un peu plus qu'une fenêtre hebdomadaire.
+/// A bit more than a weekly window.
 const RETENTION: i64 = 8 * 86400;
-/// Au-delà, deux relevés successifs ne sont pas contigus (PC éteint…).
+/// Beyond this, two consecutive samples are not contiguous (PC off…).
 pub const GAP: i64 = 15 * 60;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sample {
     pub ts: i64,
     pub percent: f32,
-    /// Relevé arrivé après un trou (PC éteint…) : le segment qui y mène est
-    /// une interpolation.
+    /// Sample taken after a gap (PC off…): the segment leading to it is an interpolation.
     pub gap: bool,
 }
 
@@ -64,8 +63,8 @@ impl History {
         }
     }
 
-    /// Ajoute les relevés frais d'un snapshot (pas les données conservées
-    /// après une panne). Un palier stable est compressé en deux points.
+    /// Adds a snapshot's fresh samples (not data kept over from before an outage). A stable plateau
+    /// is compressed into two points.
     pub fn record(&mut self, snap: &Snapshot) {
         let ts = snap.fetched_at;
         let mut changed = false;
@@ -95,7 +94,7 @@ impl History {
         }
     }
 
-    /// Relevés de la fenêtre en cours (depuis `start`).
+    /// Samples of the current window (since `start`).
     pub fn window(&self, key: &str, start: i64) -> &[Sample] {
         let Some(samples) = self.series.get(key) else { return &[] };
         let first = samples.partition_point(|s| s.ts < start);
@@ -103,8 +102,7 @@ impl History {
     }
 }
 
-/// Ajoute un relevé. Sur un palier contigu (même valeur, pas de trou), on
-/// déplace le dernier point au lieu d'en ajouter un.
+/// On a contiguous plateau (same value, no gap), moves the last point instead of adding one.
 fn push_sample(samples: &mut Vec<Sample>, ts: i64, percent: f32) -> bool {
     match samples.as_mut_slice() {
         [.., b] if b.ts >= ts => return false,
@@ -117,7 +115,7 @@ fn push_sample(samples: &mut Vec<Sample>, ts: i64, percent: f32) -> bool {
     true
 }
 
-/// Valeur interpolée à l'instant `t`. Une fenêtre démarre toujours à 0 %.
+/// Interpolated value at `t`. A window always starts at 0 %.
 fn value_at(samples: &[Sample], start: i64, t: i64) -> f32 {
     let mut prev = Sample { ts: start, percent: 0.0, gap: false };
     for &s in samples {
@@ -131,14 +129,14 @@ fn value_at(samples: &[Sample], start: i64, t: i64) -> f32 {
 }
 
 pub struct Projection {
-    /// Usage attendu à la réinitialisation au rythme récent.
+    /// Expected usage at reset, at the recent pace.
     pub at_reset: f32,
-    /// Instant où la limite serait atteinte, si c'est avant la réinitialisation.
+    /// When the limit would be hit, if before the reset.
     pub limit_at: Option<i64>,
 }
 
-/// Extrapole le rythme récent (dernier septième de la fenêtre : ~45 min pour
-/// une session de 5 h, un jour pour une semaine) jusqu'à la réinitialisation.
+/// Extrapolates the recent pace (last seventh of the window: ~45 min for a 5 h session, a day for a
+/// week) up to the reset.
 pub fn project(samples: &[Sample], start: i64, reset: i64) -> Option<Projection> {
     let last = *samples.last()?;
     let span = ((reset - start) / 7).max(30 * 60);
@@ -166,19 +164,19 @@ mod tests {
             push_sample(&mut samples, ts, percent);
         }
         let got: Vec<(i64, bool)> = samples.iter().map(|s| (s.ts, s.gap)).collect();
-        // le point d'après le trou n'est jamais déplacé : le trou reste visible
+        // the point right after a gap is never moved, so the gap stays visible
         assert_eq!(got, vec![(0, false), (900, false), (5000, true), (5300, false), (5600, false)]);
     }
 
     #[test]
     fn projects_recent_rate() {
-        // fenêtre de 7 h : rythme récent mesuré sur la dernière heure
+        // 7 h window: recent pace measured over the last hour
         let start = 0;
         let reset = 7 * 3600;
         let s = |ts, percent| Sample { ts, percent, gap: false };
         let samples = [s(3600, 5.0), s(2 * 3600, 10.0), s(3 * 3600, 40.0)];
         let p = project(&samples, start, reset).unwrap();
-        // +30 %/h pendant 4 h → limite atteinte 2 h plus tard
+        // +30 %/h for 4 h → limit hit 2 h later
         assert_eq!(p.limit_at, Some(5 * 3600));
 
         let calm = [s(3 * 3600, 6.0)];

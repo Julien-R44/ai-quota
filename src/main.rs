@@ -16,7 +16,7 @@ mod timefmt;
 mod tray;
 
 use std::cell::{Cell, RefCell};
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::io::Write;
 
 use windows::Win32::Foundation::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -39,10 +39,9 @@ const WM_OPEN_POPUP: u32 = WM_APP + 3;
 const POLL_TIMER: usize = 1;
 const RESUME_TIMER: usize = 2;
 const TRIM_TIMER: usize = 3;
-/// Plus fréquent quand une limite approche (si activé dans les réglages).
+/// Used while a limit is close (if enabled in the settings).
 const POLL_HOT_MS: u32 = 2 * 60 * 1000;
-/// Au-delà, on rafraîchit à l'ouverture du popup (l'API Claude limite
-/// vite le nombre de requêtes).
+/// Older data is refreshed when the popup opens (no more often: the Claude API rate-limits quickly).
 const STALE_SECS: i64 = 2 * 60;
 
 const PBT_APMRESUMEAUTOMATIC: usize = 0x12;
@@ -55,22 +54,25 @@ pub struct App {
     pub loading: Cell<bool>,
     pub history: RefCell<History>,
     pub settings: RefCell<Settings>,
-    /// Ligne dépliée (clé de la limite) : sa courbe est affichée.
+    /// Expanded row (limit key): its chart is shown.
     pub expanded: RefCell<Option<String>>,
     popup_closed_at: Cell<u64>,
     taskbar_created: u32,
 }
 
-static APP: AtomicPtr<App> = AtomicPtr::new(std::ptr::null_mut());
+thread_local! {
+    /// Only ever set on the UI thread, and `App` is not `Sync`: no other thread can reach it.
+    static APP: Cell<Option<&'static App>> = const { Cell::new(None) };
+}
 
-/// L'état global. Uniquement accédé depuis le thread UI.
+/// The global state. UI thread only.
 pub fn app() -> &'static App {
-    unsafe { &*APP.load(Ordering::Relaxed) }
+    APP.get().expect("app() called before init or off the UI thread")
 }
 
 impl App {
-    /// `forced` : demandé par l'utilisateur (bouton, menu, F5), passe outre
-    /// la pause après un 429. Les refresh automatiques la respectent.
+    /// `forced`: requested by the user (button, menu, F5), skips the back-off after a 429.
+    /// Automatic refreshes honor it.
     pub fn refresh(&self, forced: bool) {
         if self.loading.replace(true) {
             return;
@@ -115,7 +117,7 @@ impl App {
         unsafe { SetTimer(Some(self.hwnd), POLL_TIMER, ms, None) };
     }
 
-    /// Modifie les réglages, les enregistre et les applique tout de suite.
+    /// Changes the settings, saves them and applies them right away.
     pub fn update_settings(&self, change: impl FnOnce(&mut Settings)) {
         let (before, after) = {
             let mut settings = self.settings.borrow_mut();
@@ -125,7 +127,7 @@ impl App {
             (before, settings.clone())
         };
         i18n::set_lang(after.lang);
-        // Un provider coupé disparaît tout de suite ; un provider réactivé est relu.
+        // A disabled provider disappears right away; a re-enabled one is fetched again.
         if let Some(snap) = self.snapshot.borrow_mut().as_mut() {
             snap.usages.retain(|u| after.is_enabled(u.provider));
         }
@@ -141,17 +143,18 @@ impl App {
         popup::on_settings_changed(before.theme != after.theme);
     }
 
-    /// Rend la mémoire au système une fois que les threads de travail
-    /// (WinHTTP, rendu Direct2D) ont fini de se terminer.
+    /// Gives memory back to the system once worker threads (WinHTTP, Direct2D rendering) are done
+    /// exiting.
     fn schedule_trim(&self) {
         unsafe { SetTimer(Some(self.hwnd), TRIM_TIMER, 2_000, None) };
     }
 
     fn toggle_popup(&self) {
+        // Clicking the icon of an open popup closes it first (focus loss): the delay keeps that same
+        // click from reopening it.
         if popup::is_open() {
             popup::close();
         } else if unsafe { GetTickCount64() } - self.popup_closed_at.get() > 300 {
-            // (le clic sur l'icône a déjà fermé le popup en lui retirant le focus)
             self.open_popup();
         }
     }
@@ -179,9 +182,34 @@ pub fn popup_closed() {
     app.schedule_trim();
 }
 
+/// With `panic = "abort"` and a windows-subsystem exe, a panic (say, a `RefCell` double borrow)
+/// would kill the app without a trace: leave one in `%LOCALAPPDATA%\ai-quota\crash.log`.
+fn install_crash_log() {
+    const MAX_LOG: u64 = 64 * 1024;
+    std::panic::set_hook(Box::new(|info| {
+        let Some(dir) = std::env::var_os("LOCALAPPDATA") else { return };
+        let path = std::path::PathBuf::from(dir).join("ai-quota").join("crash.log");
+        let _ = std::fs::create_dir_all(path.parent().unwrap_or(&path));
+        let full = std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_LOG);
+        let file = std::fs::OpenOptions::new().create(true).write(true).append(!full).truncate(full).open(&path);
+        if let Ok(mut file) = file {
+            let thread = std::thread::current();
+            let _ = writeln!(
+                file,
+                "{} [{}] panicked at {}: {}",
+                timefmt::utc_iso8601(timefmt::now()),
+                thread.name().unwrap_or("?"),
+                info.location().map_or_else(|| "?".into(), |l| l.to_string()),
+                info.payload_as_str().unwrap_or("?"),
+            );
+        }
+    }));
+}
+
 fn main() {
+    install_crash_log();
     unsafe {
-        // Une seule instance : la seconde se contente d'ouvrir le popup de la première.
+        // Single instance: a second launch just opens the first one's popup.
         let _mutex = CreateMutexW(None, true, w!("Local\\ai-quota-single-instance"));
         if GetLastError() == ERROR_ALREADY_EXISTS {
             if let Ok(existing) = FindWindowW(CLASS, None) {
@@ -231,7 +259,7 @@ fn main() {
             popup_closed_at: Cell::new(0),
             taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
         }));
-        APP.store(app, Ordering::Relaxed);
+        APP.set(Some(app));
 
         sys::enable_dark_menus(hwnd);
         *app.tray.borrow_mut() = Some(Tray::new(hwnd, WM_TRAY));
@@ -251,11 +279,8 @@ fn main() {
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
-        let app = APP.load(Ordering::Relaxed);
-        if app.is_null() {
-            return DefWindowProcW(hwnd, msg, wparam, lparam);
-        }
-        let app = &*app;
+        // Messages sent while the window is being created, before `App` exists.
+        let Some(app) = APP.get() else { return DefWindowProcW(hwnd, msg, wparam, lparam) };
         match msg {
             WM_TRAY => {
                 match (lparam.0 & 0xFFFF) as u32 {
@@ -294,8 +319,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             WM_TIMER => {
                 match wparam.0 {
-                    // On continue session verrouillée : les tâches cloud consomment
-                    // le quota, et l'historique doit les voir (un GET / 5 min).
+                    // Keep polling while the session is locked: cloud tasks consume the quota and the
+                    // history must see them (one GET every 5 min).
                     POLL_TIMER => app.refresh(false),
                     RESUME_TIMER => {
                         let _ = KillTimer(Some(hwnd), RESUME_TIMER);
@@ -313,7 +338,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             WM_POWERBROADCAST => {
                 if wparam.0 == PBT_APMRESUMEAUTOMATIC {
-                    // on laisse le réseau revenir
+                    // let the network come back first
                     SetTimer(Some(hwnd), RESUME_TIMER, 5_000, None);
                 }
                 LRESULT(1)
@@ -340,7 +365,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 LRESULT(0)
             }
             m if m == app.taskbar_created && m != 0 => {
-                // Explorer a redémarré : on réinscrit l'icône.
+                // Explorer restarted: register the icon again.
                 if let Some(tray) = app.tray.borrow_mut().as_mut() {
                     tray.add(WM_TRAY);
                     tray.refresh_icon();

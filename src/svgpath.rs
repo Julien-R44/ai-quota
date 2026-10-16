@@ -1,6 +1,6 @@
-//! Mini-parseur de l'attribut `d` d'un `<path>` SVG vers une géométrie
-//! Direct2D. Couvre tout le langage de tracé (M L H V C S Q T A Z, absolus et
-//! relatifs), assez pour dessiner des logos vectoriels nets à toute taille.
+//! Tiny parser from an SVG `<path>` `d` attribute to a Direct2D geometry. Covers the whole path
+//! language (M L H V C S Q T A Z, absolute and relative), enough to draw crisp vector logos at any
+//! size.
 
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
@@ -19,7 +19,7 @@ impl Tokens<'_> {
         }
     }
 
-    /// Prochaine commande, si le prochain élément en est une.
+    /// Next command, if the next token is one.
     fn command(&mut self) -> Option<u8> {
         self.skip_separators();
         let c = *self.s.get(self.i)?;
@@ -59,7 +59,7 @@ impl Tokens<'_> {
         std::str::from_utf8(&self.s[start..self.i]).ok().and_then(|n| n.parse().ok()).unwrap_or(0.0)
     }
 
-    /// Drapeau d'arc : un seul caractère, souvent collé au nombre suivant (`013.04`).
+    /// Arc flag: a single character, often glued to the next number (`013.04`).
     fn flag(&mut self) -> bool {
         self.skip_separators();
         let c = self.s.get(self.i).copied();
@@ -72,7 +72,7 @@ fn v(x: f32, y: f32) -> Vector2 {
     Vector2 { X: x, Y: y }
 }
 
-/// Construit la géométrie du tracé, dans le repère du `viewBox` d'origine.
+/// Builds the path geometry, in the original `viewBox` coordinates.
 pub fn geometry(factory: &ID2D1Factory, d: &str, even_odd: bool) -> Result<ID2D1PathGeometry> {
     unsafe {
         let path = factory.CreatePathGeometry()?;
@@ -81,7 +81,7 @@ pub fn geometry(factory: &ID2D1Factory, d: &str, even_odd: bool) -> Result<ID2D1
 
         let mut t = Tokens { s: d.as_bytes(), i: 0 };
         let (mut cur, mut start) = ((0.0f32, 0.0f32), (0.0f32, 0.0f32));
-        // Dernier point de contrôle, pour les courbes « lisses » S et T.
+        // Last control point, for the "smooth" S and T curves.
         let mut last_cubic: Option<(f32, f32)> = None;
         let mut last_quad: Option<(f32, f32)> = None;
         let mut open = false;
@@ -91,7 +91,7 @@ pub fn geometry(factory: &ID2D1Factory, d: &str, even_odd: bool) -> Result<ID2D1
             if let Some(c) = t.command() {
                 cmd = c;
             } else if !t.has_number() || cmd.eq_ignore_ascii_case(&b'Z') {
-                // fin du tracé (ou nombres orphelins après Z : on ignore)
+                // end of path (or stray numbers after Z: ignored)
                 break;
             }
             let rel = cmd.is_ascii_lowercase();
@@ -102,7 +102,7 @@ pub fn geometry(factory: &ID2D1Factory, d: &str, even_odd: bool) -> Result<ID2D1
             };
             let (mut next_cubic, mut next_quad) = (None, None);
             let upper = cmd.to_ascii_uppercase();
-            // Un tracé qui reprend après Z sans M repart du point de départ.
+            // A subpath resuming after Z without M starts from the previous subpath's start point.
             if !open && upper != b'M' && upper != b'Z' {
                 sink.BeginFigure(v(cur.0, cur.1), D2D1_FIGURE_BEGIN_FILLED);
                 open = true;
@@ -116,7 +116,7 @@ pub fn geometry(factory: &ID2D1Factory, d: &str, even_odd: bool) -> Result<ID2D1
                     start = cur;
                     sink.BeginFigure(v(cur.0, cur.1), D2D1_FIGURE_BEGIN_FILLED);
                     open = true;
-                    // Les paires suivantes sont des lignes implicites.
+                    // Subsequent pairs are implicit line-tos.
                     cmd = if rel { b'l' } else { b'L' };
                 }
                 b'L' => {
@@ -185,7 +185,7 @@ pub fn geometry(factory: &ID2D1Factory, d: &str, even_odd: bool) -> Result<ID2D1
                     }
                     cur = start;
                 }
-                _ => break, // commande inconnue : on s'arrête proprement
+                _ => break, // unknown command: stop cleanly
             }
             last_cubic = next_cubic;
             last_quad = next_quad;
