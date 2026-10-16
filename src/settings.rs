@@ -69,6 +69,8 @@ struct Providers {
 
 /// Only sound on an in-memory `serde_json::Value`: a streaming deserializer could be left
 /// mid-value after a type error.
+// Serde's deserialize_with requires a Result even though malformed fields intentionally become None.
+#[allow(clippy::unnecessary_wraps)]
 fn lenient<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
     Ok(T::deserialize(d).ok())
 }
@@ -123,7 +125,7 @@ impl Settings {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Lang, Settings, ThemePref};
 
     #[test]
     fn json_roundtrip() {

@@ -12,7 +12,7 @@ use crate::timefmt::{now, parse_iso8601};
 const FIVE_HOURS: i64 = 5 * 3600;
 const WEEK: i64 = 7 * 86400;
 
-/// Claude Code's public OAuth client (the same one CodexBar uses).
+/// Claude Code's public OAuth client (the same one `CodexBar` uses).
 const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 
 pub(super) fn fetch(forced: bool) -> Option<Usage> {
@@ -229,7 +229,7 @@ fn parse_claude(json: &Value) -> Vec<Limit> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::*;
+    use super::{banked_resets, parse_iso8601, save_tokens};
 
     fn temp_creds(name: &str, content: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("ai-quota-test-{name}-{}", std::process::id()));

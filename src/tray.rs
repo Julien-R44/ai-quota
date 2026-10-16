@@ -1,8 +1,17 @@
-use windows::Win32::Foundation::{HWND, POINT, RECT};
-use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateBitmap, CreateDIBSection, DIB_RGB_COLORS, DeleteObject,
+};
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
-use windows::Win32::UI::Shell::*;
-use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::Win32::UI::Shell::{
+    NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NOTIFY_ICON_MESSAGE,
+    NOTIFYICON_VERSION_4, NOTIFYICONDATAW, NOTIFYICONIDENTIFIER, Shell_NotifyIconGetRect, Shell_NotifyIconW,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    AppendMenuW, CopyIcon, CreateIconIndirect, CreatePopupMenu, DestroyIcon, DestroyMenu, HICON, ICONINFO,
+    IDI_APPLICATION, LoadIconW, MF_CHECKED, MF_SEPARATOR, MF_STRING, PostMessageW, SM_CXSMICON, SetForegroundWindow,
+    TPM_BOTTOMALIGN, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu, WM_NULL,
+};
 
 use crate::model::{Snapshot, Status};
 use crate::{art, i18n};
@@ -43,21 +52,17 @@ impl Tray {
         let mut nid = self.data();
         nid.uFlags |= NIF_MESSAGE;
         nid.uCallbackMessage = callback;
-        unsafe {
-            let _ = Shell_NotifyIconW(NIM_ADD, &nid);
-            nid.Anonymous.uVersion = NOTIFYICON_VERSION_4;
-            let _ = Shell_NotifyIconW(NIM_SETVERSION, &nid);
-        }
+        notify_icon(NIM_ADD, &nid);
+        nid.Anonymous.uVersion = NOTIFYICON_VERSION_4;
+        notify_icon(NIM_SETVERSION, &nid);
     }
 
     /// Theme or DPI changed: redraw the icon.
     pub fn refresh_icon(&mut self) {
         let old = self.icon;
         self.icon = make_icon(self.hwnd);
-        unsafe {
-            let _ = Shell_NotifyIconW(NIM_MODIFY, &self.data());
-            let _ = DestroyIcon(old);
-        }
+        notify_icon(NIM_MODIFY, &self.data());
+        destroy_icon(old);
     }
 
     pub fn set_snapshot(&mut self, snap: &Snapshot) {
@@ -77,9 +82,7 @@ impl Tray {
             }
         }
         self.tip = tip;
-        unsafe {
-            let _ = Shell_NotifyIconW(NIM_MODIFY, &self.data());
-        }
+        notify_icon(NIM_MODIFY, &self.data());
     }
 
     pub fn icon_rect(&self) -> Option<RECT> {
@@ -89,21 +92,24 @@ impl Tray {
             uID: TRAY_ID,
             ..Default::default()
         };
-        unsafe { Shell_NotifyIconGetRect(&id).ok() }
+        // SAFETY: id has the required size and identifies this tray icon. The API copies the
+        // identifier synchronously and returns a RECT by value, or an error if Explorer lost it.
+        unsafe { Shell_NotifyIconGetRect(&raw const id).ok() }
     }
 }
 
 impl Drop for Tray {
     fn drop(&mut self) {
-        unsafe {
-            let _ = Shell_NotifyIconW(NIM_DELETE, &self.data());
-            let _ = DestroyIcon(self.icon);
-        }
+        notify_icon(NIM_DELETE, &self.data());
+        destroy_icon(self.icon);
     }
 }
 
 /// Monochrome icon rendered at the exact size the tray DPI asks for.
 fn make_icon(hwnd: HWND) -> HICON {
+    // SAFETY: Windows validates hwnd for DPI queries. The 32-bit top-down DIB allocates size*size
+    // aligned pixels, written only while its bitmap is owned here. CreateIconIndirect copies
+    // both bitmaps before they are deleted; CopyIcon makes the fallback icon independently owned.
     unsafe {
         let dpi = GetDpiForWindow(hwnd).max(96);
         let size = GetSystemMetricsForDpi(SM_CXSMICON, dpi).max(16) as u32;
@@ -123,8 +129,8 @@ fn make_icon(hwnd: HWND) -> HICON {
             ..Default::default()
         };
         let mut bits = std::ptr::null_mut();
-        let Ok(color) = CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) else {
-            return LoadIconW(None, IDI_APPLICATION).unwrap_or_default();
+        let Ok(color) = CreateDIBSection(None, &raw const bmi, DIB_RGB_COLORS, &raw mut bits, None, 0) else {
+            return LoadIconW(None, IDI_APPLICATION).and_then(|icon| CopyIcon(icon)).unwrap_or_default();
         };
         let px = std::slice::from_raw_parts_mut(bits.cast::<u32>(), (size * size) as usize);
         for (dst, a) in px.iter_mut().zip(cov) {
@@ -132,7 +138,7 @@ fn make_icon(hwnd: HWND) -> HICON {
         }
         let mask = CreateBitmap(size as i32, size as i32, 1, 1, None);
         let info = ICONINFO { fIcon: true.into(), hbmMask: mask, hbmColor: color, ..Default::default() };
-        let icon = CreateIconIndirect(&info).unwrap_or_default();
+        let icon = CreateIconIndirect(&raw const info).unwrap_or_default();
         let _ = DeleteObject(color.into());
         let _ = DeleteObject(mask.into());
         icon
@@ -147,6 +153,19 @@ pub enum MenuChoice {
 }
 
 pub fn show_menu(hwnd: HWND, at: POINT, autostart: bool) -> Option<MenuChoice> {
+    match menu_command(hwnd, at, autostart)? {
+        1 => Some(MenuChoice::Refresh),
+        2 => Some(MenuChoice::ToggleAutostart),
+        3 => Some(MenuChoice::Quit),
+        4 => Some(MenuChoice::Settings),
+        _ => None,
+    }
+}
+
+fn menu_command(hwnd: HWND, at: POINT, autostart: bool) -> Option<i32> {
+    // SAFETY: menu is created and destroyed once on this UI thread. AppendMenuW copies the
+    // temporary strings. TrackPopupMenu borrows the menu and owner for its modal loop, with no
+    // App/Popup RefCell borrow held by the caller. The posted WM_NULL carries no pointers.
     unsafe {
         let menu = CreatePopupMenu().ok()?;
         let item = |fr, en| HSTRING::from(i18n::tr(fr, en));
@@ -168,14 +187,24 @@ pub fn show_menu(hwnd: HWND, at: POINT, autostart: bool) -> Option<MenuChoice> {
             hwnd,
             None,
         );
-        let _ = PostMessageW(Some(hwnd), WM_NULL, Default::default(), Default::default());
+        let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM::default(), LPARAM::default());
         let _ = DestroyMenu(menu);
-        match cmd.0 {
-            1 => Some(MenuChoice::Refresh),
-            2 => Some(MenuChoice::ToggleAutostart),
-            3 => Some(MenuChoice::Quit),
-            4 => Some(MenuChoice::Settings),
-            _ => None,
-        }
+        Some(cmd.0)
+    }
+}
+
+fn notify_icon(action: NOTIFY_ICON_MESSAGE, data: &NOTIFYICONDATAW) {
+    // SAFETY: data is fully initialized, includes cbSize, and stays live while Shell_NotifyIconW
+    // copies its fields. For ADD/MODIFY its icon remains owned by Tray until after this call.
+    unsafe {
+        let _ = Shell_NotifyIconW(action, data);
+    }
+}
+
+fn destroy_icon(icon: HICON) {
+    // SAFETY: make_icon returns an owned CreateIconIndirect/CopyIcon handle, destroyed once
+    // when replaced or dropped. A null handle from a failed creation is rejected by Windows.
+    unsafe {
+        let _ = DestroyIcon(icon);
     }
 }

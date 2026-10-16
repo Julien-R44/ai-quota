@@ -238,7 +238,10 @@ fn parse_amp(display: &str, now: i64) -> Parsed {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{ANSI, FREE_DOLLARS, FREE_PERCENT, INDIVIDUAL, LEGACY, ORBS, PERIOD, TIER, WORKSPACE, parse_amp};
+    use crate::model::{Amount, Credit, LimitKind};
+    use crate::timefmt::parse_iso8601;
+    use std::sync::LazyLock;
 
     #[test]
     fn patterns_compile() {

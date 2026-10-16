@@ -17,34 +17,54 @@ fn path() -> Option<PathBuf> {
     Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("ai-quota").join("amp.token"))
 }
 
-fn blob(data: &[u8]) -> CRYPT_INTEGER_BLOB {
-    CRYPT_INTEGER_BLOB { cbData: data.len() as u32, pbData: data.as_ptr() as *mut u8 }
+struct DpapiOutput(CRYPT_INTEGER_BLOB);
+
+impl Drop for DpapiOutput {
+    fn drop(&mut self) {
+        // SAFETY: Only DPAPI writes this blob. Its output is LocalAlloc-owned, and this guard
+        // frees it exactly once, after the bytes have been copied. LocalFree accepts null.
+        unsafe {
+            let _ = LocalFree(Some(HLOCAL(self.0.pbData.cast())));
+        }
+    }
 }
 
-/// Copies the DPAPI-allocated blob, then frees it.
-unsafe fn take(out: CRYPT_INTEGER_BLOB) -> Vec<u8> {
+fn crypt(data: &[u8], decrypt: bool) -> Option<Vec<u8>> {
+    let input = CRYPT_INTEGER_BLOB { cbData: u32::try_from(data.len()).ok()?, pbData: data.as_ptr().cast_mut() };
+    let mut out = DpapiOutput(CRYPT_INTEGER_BLOB::default());
+    // SAFETY: input points to data with a checked byte length. DPAPI does not modify input,
+    // despite the binding's mutable pointer. out is writable and owned by its freeing guard;
+    // successful DPAPI calls supply an initialized output allocation of cbData bytes.
     unsafe {
-        let bytes = std::slice::from_raw_parts(out.pbData, out.cbData as usize).to_vec();
-        let _ = LocalFree(Some(HLOCAL(out.pbData.cast())));
-        bytes
+        if decrypt {
+            CryptUnprotectData(&raw const input, None, None, None, None, CRYPTPROTECT_UI_FORBIDDEN, &raw mut out.0)
+                .ok()?;
+        } else {
+            CryptProtectData(
+                &raw const input,
+                w!("AI Quota - Amp"),
+                None,
+                None,
+                None,
+                CRYPTPROTECT_UI_FORBIDDEN,
+                &raw mut out.0,
+            )
+            .ok()?;
+        }
+        if out.0.cbData == 0 {
+            Some(Vec::new())
+        } else {
+            Some(std::slice::from_raw_parts(out.0.pbData, out.0.cbData as usize).to_vec())
+        }
     }
 }
 
 fn protect(data: &[u8]) -> Option<Vec<u8>> {
-    let mut out = CRYPT_INTEGER_BLOB::default();
-    unsafe {
-        CryptProtectData(&blob(data), w!("AI Quota - Amp"), None, None, None, CRYPTPROTECT_UI_FORBIDDEN, &mut out)
-            .ok()?;
-        Some(take(out))
-    }
+    crypt(data, false)
 }
 
 fn unprotect(sealed: &[u8]) -> Option<Vec<u8>> {
-    let mut out = CRYPT_INTEGER_BLOB::default();
-    unsafe {
-        CryptUnprotectData(&blob(sealed), None, None, None, None, CRYPTPROTECT_UI_FORBIDDEN, &mut out).ok()?;
-        Some(take(out))
-    }
+    crypt(sealed, true)
 }
 
 pub fn save_amp_token(token: &str) -> bool {
@@ -68,17 +88,20 @@ pub fn clear_amp_token() {
 }
 
 pub fn clipboard_text() -> Option<String> {
+    // SAFETY: OpenClipboard prevents replacement while its HGLOBAL is borrowed. GlobalLock's
+    // pointer is read only through GlobalSize / size_of::<u16>() units, then unlocked before
+    // closing the clipboard on every return path. CF_UNICODETEXT uses aligned UTF-16 storage.
     unsafe {
         OpenClipboard(None).ok()?;
         let text = (|| {
             let global = HGLOBAL(GetClipboardData(CF_UNICODETEXT).ok()?.0);
-            let ptr = GlobalLock(global) as *const u16;
+            let ptr = GlobalLock(global).cast::<u16>().cast_const();
             if ptr.is_null() {
                 return None;
             }
             // Should be NUL-terminated, but another app may have put anything there: never read
             // past the allocation.
-            let units = std::slice::from_raw_parts(ptr, GlobalSize(global) / 2);
+            let units = std::slice::from_raw_parts(ptr, GlobalSize(global) / size_of::<u16>());
             let len = units.iter().position(|&c| c == 0).unwrap_or(units.len());
             let text = String::from_utf16_lossy(&units[..len]);
             let _ = GlobalUnlock(global);
@@ -91,12 +114,18 @@ pub fn clipboard_text() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{protect, unprotect};
 
     #[test]
     fn dpapi_roundtrip() {
-        let sealed = protect(b"sgamp_test_token").unwrap();
-        assert!(!sealed.windows(16).any(|w| w == b"sgamp_test_token"));
-        assert_eq!(unprotect(&sealed).unwrap(), b"sgamp_test_token");
+        let token = b"sgamp_test_token";
+        let sealed = protect(token).unwrap();
+        assert!(!sealed.windows(token.len()).any(|w| w == token));
+        assert_eq!(unprotect(&sealed).unwrap(), token);
+    }
+
+    #[test]
+    fn rejects_invalid_dpapi_blob() {
+        assert!(unprotect(b"not a DPAPI blob").is_none());
     }
 }

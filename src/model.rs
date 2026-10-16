@@ -106,7 +106,7 @@ pub fn dollars(v: f64) -> String {
 
 impl Amount {
     /// "18,57 $ / 20 $", "732 h / 750 h". Orbs hours are rounded down, with "< 1 h" below one hour,
-    /// as Amp and CodexBar do.
+    /// as Amp and `CodexBar` do.
     pub fn text(&self) -> String {
         let hours = |v: f64| match (lang(), v) {
             (Lang::Fr, v) if v > 0.0 && v < 1.0 => "<\u{a0}1\u{a0}h".to_string(),
@@ -289,7 +289,7 @@ impl Snapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Amount, Lang, dollars};
     use crate::i18n::LangGuard;
 
     #[test]
