@@ -1,3 +1,4 @@
+use std::fmt;
 use std::ops::{Index, IndexMut};
 
 use crate::i18n::{Lang, lang, tr};
@@ -163,10 +164,43 @@ impl Amount {
     }
 }
 
+/// Identifies a limit window across fetches. Its text form names the series in `history.tsv`, so
+/// it must not change between versions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LimitKey {
+    ClaudeSession,
+    ClaudeWeekly,
+    /// Weekly limit of one model, by display name.
+    ClaudeWeeklyModel(String),
+    /// Window kind not known yet, by its API name.
+    ClaudeOther(String),
+    /// Codex identifies its windows by their length.
+    CodexWindow {
+        seconds: i64,
+    },
+    AmpAgent,
+    AmpOrbs,
+    AmpFree,
+}
+
+impl fmt::Display for LimitKey {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            LimitKey::ClaudeSession => f.write_str("claude.session"),
+            LimitKey::ClaudeWeekly => f.write_str("claude.weekly"),
+            LimitKey::ClaudeWeeklyModel(model) => write!(f, "claude.weekly.{}", model.to_lowercase()),
+            LimitKey::ClaudeOther(kind) => write!(f, "claude.{kind}"),
+            LimitKey::CodexWindow { seconds } => write!(f, "codex.{seconds}"),
+            LimitKey::AmpAgent => f.write_str("amp.agent"),
+            LimitKey::AmpOrbs => f.write_str("amp.orbs"),
+            LimitKey::AmpFree => f.write_str("amp.free"),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Limit {
-    /// Stable window id (`claude.session`, `codex.604800`…), used as the history key.
-    pub key: String,
+    pub key: LimitKey,
     pub kind: LimitKind,
     pub percent: f32,
     /// Left / total, when the limit is in dollars or hours.
@@ -331,8 +365,25 @@ impl Snapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::{Amount, Lang, PerProvider, Provider, dollars};
+    use super::{Amount, Lang, LimitKey, PerProvider, Provider, dollars};
     use crate::i18n::LangGuard;
+
+    #[test]
+    fn limit_keys_keep_their_history_names() {
+        let names = [
+            (LimitKey::ClaudeSession, "claude.session"),
+            (LimitKey::ClaudeWeekly, "claude.weekly"),
+            (LimitKey::ClaudeWeeklyModel("Opus".into()), "claude.weekly.opus"),
+            (LimitKey::ClaudeOther("weekly_oauth_apps".into()), "claude.weekly_oauth_apps"),
+            (LimitKey::CodexWindow { seconds: 18000 }, "codex.18000"),
+            (LimitKey::AmpAgent, "amp.agent"),
+            (LimitKey::AmpOrbs, "amp.orbs"),
+            (LimitKey::AmpFree, "amp.free"),
+        ];
+        for (key, name) in names {
+            assert_eq!(key.to_string(), name);
+        }
+    }
 
     #[test]
     fn per_provider_slots_follow_all() {

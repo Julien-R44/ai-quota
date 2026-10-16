@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use super::{Ctx, Parsed, capitalize, count, failed, fetch_json, read_json, resolve, unless_cooling_down, window_kind};
-use crate::model::{BankedResets, Limit, Problem, Provider, Usage};
+use crate::model::{BankedResets, Limit, LimitKey, Problem, Provider, Usage};
 use crate::timefmt::now;
 
 pub(super) fn fetch(ctx: &Ctx, forced: bool) -> Option<Usage> {
@@ -56,7 +56,7 @@ fn parse_codex(json: &Value) -> Vec<Limit> {
             let resets_at =
                 w["reset_at"].as_i64().or_else(|| w["reset_after_seconds"].as_i64().map(|s| now().saturating_add(s)));
             let percent = w["used_percent"].as_f64()? as f32;
-            let key = format!("codex.{seconds}");
+            let key = LimitKey::CodexWindow { seconds };
             Some((seconds, Limit { key, kind, percent, amount: None, resets_at, window_secs: Some(seconds) }))
         })
         .collect();

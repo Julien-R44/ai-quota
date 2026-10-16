@@ -4,7 +4,7 @@ use regex_lite::Regex;
 use serde_json::Value;
 
 use super::{Ctx, Parsed, json_response, resolve, unless_cooling_down};
-use crate::model::{Amount, Credit, Limit, LimitKind, Problem, Provider, Usage};
+use crate::model::{Amount, Credit, Limit, LimitKey, LimitKind, Problem, Provider, Usage};
 use crate::timefmt::{self, now, parse_iso8601};
 
 pub(super) fn fetch(ctx: &Ctx, forced: bool) -> Option<Usage> {
@@ -148,7 +148,7 @@ fn parse_amp(display: &str, now: i64) -> Parsed {
             && total > 0.0
         {
             limits.push(Limit {
-                key: "amp.agent".into(),
+                key: LimitKey::AmpAgent,
                 kind: LimitKind::AmpAgent,
                 percent: used(left, total),
                 amount: Some(Amount::Dollars { left, total }),
@@ -161,7 +161,7 @@ fn parse_amp(display: &str, now: i64) -> Parsed {
             && total > 0.0
         {
             limits.push(Limit {
-                key: "amp.orbs".into(),
+                key: LimitKey::AmpOrbs,
                 kind: LimitKind::AmpOrbs(o[3].to_lowercase()),
                 percent: used(left, total),
                 amount: Some(Amount::Hours { left, total }),
@@ -172,12 +172,13 @@ fn parse_amp(display: &str, now: i64) -> Parsed {
     } else if let Some(c) = LEGACY.iter().find_map(|re| captures(re, &text)) {
         plan = Some(c[1].clone());
         let resets_at = renewal(&c[4], &c[5], now);
-        for (key, kind, remaining) in
-            [("amp.agent", LimitKind::AmpAgent, &c[2]), ("amp.orbs", LimitKind::AmpOrbs(String::new()), &c[3])]
-        {
+        for (key, kind, remaining) in [
+            (LimitKey::AmpAgent, LimitKind::AmpAgent, &c[2]),
+            (LimitKey::AmpOrbs, LimitKind::AmpOrbs(String::new()), &c[3]),
+        ] {
             if let Some(left) = number(remaining) {
                 let percent = (100.0 - left).clamp(0.0, 100.0) as f32;
-                limits.push(Limit { key: key.into(), kind, percent, amount: None, resets_at, window_secs: None });
+                limits.push(Limit { key, kind, percent, amount: None, resets_at, window_secs: None });
             }
         }
     }
@@ -191,7 +192,7 @@ fn parse_amp(display: &str, now: i64) -> Parsed {
         let resets_at =
             (rate > 0.0 && left < total).then(|| now.saturating_add(((total - left) / rate * 3600.0) as i64));
         limits.push(Limit {
-            key: "amp.free".into(),
+            key: LimitKey::AmpFree,
             kind: LimitKind::AmpFree,
             percent: used(left, total),
             amount: Some(Amount::Dollars { left, total }),
@@ -203,7 +204,7 @@ fn parse_amp(display: &str, now: i64) -> Parsed {
     {
         // Resets every day at 8 pm New York time.
         limits.push(Limit {
-            key: "amp.free".into(),
+            key: LimitKey::AmpFree,
             kind: LimitKind::AmpFree,
             percent: (100.0 - left).clamp(0.0, 100.0) as f32,
             amount: None,

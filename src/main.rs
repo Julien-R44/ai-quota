@@ -65,7 +65,7 @@ pub struct App {
     pub history: RefCell<History>,
     pub settings: RefCell<Settings>,
     /// Expanded row (limit key): its chart is shown.
-    pub expanded: RefCell<Option<String>>,
+    pub expanded: RefCell<Option<model::LimitKey>>,
     popup_closed_at: Cell<u64>,
     taskbar_created: u32,
     // Explicitly disconnected on window destruction because App itself is process-lived.

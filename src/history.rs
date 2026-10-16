@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
 
-use crate::model::{Snapshot, Status};
+use crate::model::{LimitKey, Snapshot, Status};
 
 /// A bit more than a weekly window.
 const RETENTION: i64 = 8 * 86400;
@@ -25,6 +25,7 @@ pub struct Sample {
 
 #[derive(Default)]
 pub struct History {
+    /// By [`LimitKey`] text form, as stored in the file.
     series: HashMap<String, Vec<Sample>>,
 }
 
@@ -72,7 +73,7 @@ impl History {
         for u in snap.usages.iter().filter(|u| u.stale_since.is_none()) {
             let Status::Ok(limits) = &u.status else { continue };
             for l in limits {
-                let samples = self.series.entry(l.key.clone()).or_default();
+                let samples = self.series.entry(l.key.to_string()).or_default();
                 changed |= push_sample(samples, ts, l.percent);
             }
         }
@@ -96,8 +97,8 @@ impl History {
     }
 
     /// Samples of the current window (since `start`).
-    pub fn window(&self, key: &str, start: i64) -> &[Sample] {
-        let Some(samples) = self.series.get(key) else { return &[] };
+    pub fn window(&self, key: &LimitKey, start: i64) -> &[Sample] {
+        let Some(samples) = self.series.get(&key.to_string()) else { return &[] };
         let first = samples.partition_point(|s| s.ts < start);
         &samples[first..]
     }

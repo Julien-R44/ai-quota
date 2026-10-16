@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::{Ctx, Parsed, capitalize, count, home, http_error, json_response, read_json, resolve, unless_cooling_down};
 use crate::http;
-use crate::model::{BankedResets, Limit, LimitKind, Problem, Provider, Usage};
+use crate::model::{BankedResets, Limit, LimitKey, LimitKind, Problem, Provider, Usage};
 use crate::timefmt::{now, parse_iso8601};
 
 const FIVE_HOURS: i64 = 5 * 3600;
@@ -178,14 +178,16 @@ fn parse_claude(json: &Value) -> Vec<Limit> {
             .filter_map(|l| {
                 let percent = l["percent"].as_f64()? as f32;
                 let (key, kind, window) = match l["kind"].as_str()? {
-                    "session" => ("claude.session".into(), LimitKind::Session { hours: 5 }, Some(FIVE_HOURS)),
-                    "weekly_all" => ("claude.weekly".into(), LimitKind::Weekly, Some(WEEK)),
+                    "session" => (LimitKey::ClaudeSession, LimitKind::Session { hours: 5 }, Some(FIVE_HOURS)),
+                    "weekly_all" => (LimitKey::ClaudeWeekly, LimitKind::Weekly, Some(WEEK)),
                     "weekly_scoped" => {
                         let model = l["scope"]["model"]["display_name"].as_str().unwrap_or("?");
-                        let key = format!("claude.weekly.{}", model.to_lowercase());
-                        (key, LimitKind::WeeklyModel(model.into()), Some(WEEK))
+                        (LimitKey::ClaudeWeeklyModel(model.into()), LimitKind::WeeklyModel(model.into()), Some(WEEK))
                     }
-                    other => (format!("claude.{other}"), LimitKind::Other(capitalize(&other.replace('_', " "))), None),
+                    other => {
+                        let label = capitalize(&other.replace('_', " "));
+                        (LimitKey::ClaudeOther(other.into()), LimitKind::Other(label), None)
+                    }
                 };
                 Some(Limit {
                     key,
@@ -203,16 +205,21 @@ fn parse_claude(json: &Value) -> Vec<Limit> {
     }
     // Legacy format: one object per window.
     [
-        ("five_hour", "claude.session", LimitKind::Session { hours: 5 }, FIVE_HOURS),
-        ("seven_day", "claude.weekly", LimitKind::Weekly, WEEK),
-        ("seven_day_opus", "claude.weekly.opus", LimitKind::WeeklyModel("Opus".into()), WEEK),
-        ("seven_day_sonnet", "claude.weekly.sonnet", LimitKind::WeeklyModel("Sonnet".into()), WEEK),
+        ("five_hour", LimitKey::ClaudeSession, LimitKind::Session { hours: 5 }, FIVE_HOURS),
+        ("seven_day", LimitKey::ClaudeWeekly, LimitKind::Weekly, WEEK),
+        ("seven_day_opus", LimitKey::ClaudeWeeklyModel("Opus".into()), LimitKind::WeeklyModel("Opus".into()), WEEK),
+        (
+            "seven_day_sonnet",
+            LimitKey::ClaudeWeeklyModel("Sonnet".into()),
+            LimitKind::WeeklyModel("Sonnet".into()),
+            WEEK,
+        ),
     ]
     .into_iter()
     .filter_map(|(field, key, kind, window)| {
         let w = json.get(field)?;
         Some(Limit {
-            key: key.into(),
+            key,
             kind,
             amount: None,
             percent: w["utilization"].as_f64()? as f32,

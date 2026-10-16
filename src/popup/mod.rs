@@ -43,7 +43,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{BOOL, HSTRING, PCWSTR, w};
 use windows_numerics::Matrix3x2;
 
-use crate::model::{Provider, Snapshot};
+use crate::model::{LimitKey, Provider, Snapshot};
 use crate::{app, secret, sys};
 use gfx::Gfx;
 use main_view::MainLayout;
@@ -98,7 +98,7 @@ enum Layout<'a> {
 }
 
 impl<'a> Layout<'a> {
-    fn new(view: View, snap: Option<&'a Snapshot>, expanded: Option<&str>) -> Self {
+    fn new(view: View, snap: Option<&'a Snapshot>, expanded: Option<&LimitKey>) -> Self {
         match view {
             View::Main => Layout::Main(main_view::layout(snap, expanded)),
             View::Settings => Layout::Settings(settings_view::layout()),
@@ -119,7 +119,7 @@ impl<'a> Layout<'a> {
 fn layout_height(view: View) -> f32 {
     let app = app();
     let (snap, expanded) = (app.snapshot.borrow(), app.expanded.borrow());
-    Layout::new(view, snap.as_ref(), expanded.as_deref()).height()
+    Layout::new(view, snap.as_ref(), expanded.as_ref()).height()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -142,7 +142,7 @@ struct Hits {
     hover: Option<Hit>,
     areas: Vec<(D2D_RECT_F, Hit)>,
     /// Keys of the limit rows drawn, in order: the targets of `Hit::Row`.
-    rows: Vec<String>,
+    rows: Vec<LimitKey>,
 }
 
 impl Hits {
@@ -157,9 +157,9 @@ impl Hits {
         self.hover == Some(hit)
     }
 
-    fn add_row(&mut self, r: D2D_RECT_F, key: &str) -> bool {
+    fn add_row(&mut self, r: D2D_RECT_F, key: &LimitKey) -> bool {
         let hit = Hit::Row(self.rows.len());
-        self.rows.push(key.to_string());
+        self.rows.push(key.clone());
         self.add(r, hit)
     }
 
@@ -552,7 +552,7 @@ impl Popup {
         let app = app();
         let snap = app.snapshot.borrow();
         let expanded = app.expanded.borrow();
-        let layout = Layout::new(self.view, snap.as_ref(), expanded.as_deref());
+        let layout = Layout::new(self.view, snap.as_ref(), expanded.as_ref());
         // Safety net for state changes that did not go through `place`: the frame is drawn from this layout, so
         // the window must have its height.
         if layout.height().to_bits() != self.height.to_bits() {
@@ -619,7 +619,7 @@ enum Action {
     Refresh,
     Open(Provider),
     /// Expands / collapses a limit's chart.
-    Toggle(String),
+    Toggle(LimitKey),
     View(View),
     /// Back to the parent view (provider page -> settings -> main).
     Back,
@@ -765,7 +765,7 @@ fn run(action: Option<Action>) {
         Some(Action::Toggle(key)) => {
             {
                 let mut expanded = app().expanded.borrow_mut();
-                *expanded = if expanded.as_deref() == Some(key.as_str()) { None } else { Some(key) };
+                *expanded = if expanded.as_ref() == Some(&key) { None } else { Some(key) };
             }
             if let Some(hwnd) = with_popup(|p| {
                 p.chart_opened = Instant::now();

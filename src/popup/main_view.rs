@@ -13,7 +13,7 @@ use super::gfx::Gfx;
 use super::theme::Theme;
 use super::{Anim, HEADER_H, Hit, Hits, MARGIN, WIDTH, ease_out, rect};
 use crate::i18n::{self, Lang, tr};
-use crate::model::{BankedResets, Credit, Limit, LimitKind, Snapshot, Status, Usage, dollars};
+use crate::model::{BankedResets, Credit, Limit, LimitKey, LimitKind, Snapshot, Status, Usage, dollars};
 use crate::{app, timefmt};
 
 const CARD_GAP: f32 = 8.0;
@@ -70,7 +70,7 @@ fn inner(card: &D2D_RECT_F) -> (f32, f32) {
     (card.left + CARD_PAD, card.right - card.left - 2.0 * CARD_PAD)
 }
 
-pub(super) fn layout<'a>(snap: Option<&'a Snapshot>, expanded: Option<&str>) -> MainLayout<'a> {
+pub(super) fn layout<'a>(snap: Option<&'a Snapshot>, expanded: Option<&LimitKey>) -> MainLayout<'a> {
     let (x, w) = (MARGIN, WIDTH - 2.0 * MARGIN);
     let placeholder = rect(x, HEADER_H, w, 2.0 * CARD_PAD + MESSAGE_H);
     let content = match snap {
@@ -98,14 +98,14 @@ pub(super) fn layout<'a>(snap: Option<&'a Snapshot>, expanded: Option<&str>) -> 
 }
 
 /// Lays out one card from its top edge (`frame.top`); `frame.bottom` is computed.
-fn card_layout<'a>(u: &'a Usage, expanded: Option<&str>, mut frame: D2D_RECT_F, index: &mut usize) -> Card<'a> {
+fn card_layout<'a>(u: &'a Usage, expanded: Option<&LimitKey>, mut frame: D2D_RECT_F, index: &mut usize) -> Card<'a> {
     let mut y = frame.top + CARD_PAD + CARD_HEAD + HEAD_GAP;
     let body = match &u.status {
         Status::Ok(limits) if !limits.is_empty() => {
             let rows: Vec<Row> = limits
                 .iter()
                 .map(|limit| {
-                    let row = Row { limit, index: *index, top: y, expanded: expanded == Some(limit.key.as_str()) };
+                    let row = Row { limit, index: *index, top: y, expanded: expanded == Some(&limit.key) };
                     *index += 1;
                     y += row.height() + ROW_GAP;
                     row
