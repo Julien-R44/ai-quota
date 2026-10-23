@@ -5,6 +5,7 @@
 mod amp;
 mod claude;
 mod codex;
+mod opencode;
 #[cfg(test)]
 mod tests;
 
@@ -23,8 +24,9 @@ const MIN_COOLDOWN: i64 = 5 * 60;
 const CACHE_MAX_AGE: i64 = 12 * 3600;
 
 /// Everything the providers touch outside the process: the network, the CLI credential files,
-/// the Amp token and the directory holding cooldowns and cached responses. [`Ctx::system`] wires
-/// the real machine; tests build one on a temporary directory with a fake [`Http`].
+/// the Amp and `OpenCode` tokens and the directory holding cooldowns and cached responses.
+/// [`Ctx::system`] wires the real machine; tests build one on a temporary directory with a fake
+/// [`Http`].
 pub struct Ctx<'a> {
     pub http: &'a dyn Http,
     /// Cooldowns and cached responses (`%LOCALAPPDATA%\ai-quota`). `None` disables persistence.
@@ -33,24 +35,32 @@ pub struct Ctx<'a> {
     pub claude_dir: PathBuf,
     /// Holds Codex's `auth.json`.
     pub codex_dir: PathBuf,
+    /// Holds `OpenCode`'s `auth.json` (versions before the credentials moved to its database).
+    pub opencode_dir: PathBuf,
     pub amp_token: Option<String>,
+    pub opencode_token: Option<String>,
 }
 
 impl Ctx<'static> {
-    /// The real machine: `WinHTTP`, `%LOCALAPPDATA%`, `CLAUDE_CONFIG_DIR` / `CODEX_HOME` (or their
-    /// default folders), and the Amp token from `AMP_API_KEY` or the encrypted settings file.
+    /// The real machine: `WinHTTP`, `%LOCALAPPDATA%`, `CLAUDE_CONFIG_DIR` / `CODEX_HOME` /
+    /// `XDG_DATA_HOME` (or their default folders), and the Amp and `OpenCode` tokens from their
+    /// environment variable or the encrypted settings file.
     pub fn system() -> Self {
-        let config_dir =
-            |env: &str, default: &str| std::env::var_os(env).map_or_else(|| home().join(default), PathBuf::from);
+        let dir = |env: &str, default: &str| std::env::var_os(env).map_or_else(|| home().join(default), PathBuf::from);
         Ctx {
             http: &WinHttp,
             state_dir: std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("ai-quota")),
-            claude_dir: config_dir("CLAUDE_CONFIG_DIR", ".claude"),
-            codex_dir: config_dir("CODEX_HOME", ".codex"),
+            claude_dir: dir("CLAUDE_CONFIG_DIR", ".claude"),
+            codex_dir: dir("CODEX_HOME", ".codex"),
+            opencode_dir: dir("XDG_DATA_HOME", ".local/share").join("opencode"),
             amp_token: std::env::var("AMP_API_KEY")
                 .ok()
                 .filter(|t| !t.trim().is_empty())
-                .or_else(secret::load_amp_token),
+                .or_else(|| secret::load_token(Provider::Amp)),
+            opencode_token: std::env::var("OPENCODE_API_KEY")
+                .ok()
+                .filter(|t| !t.trim().is_empty())
+                .or_else(|| secret::load_token(Provider::Opencode)),
         }
     }
 }
@@ -75,6 +85,7 @@ fn fetch(ctx: &Ctx, p: Provider, forced: bool) -> Option<Usage> {
         Provider::Claude => claude::fetch(ctx, forced),
         Provider::Codex => codex::fetch(ctx, forced),
         Provider::Amp => amp::fetch(ctx, forced),
+        Provider::Opencode => opencode::fetch(ctx, forced),
     }
 }
 

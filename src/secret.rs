@@ -1,5 +1,5 @@
-//! Amp token: pasted from the clipboard, encrypted with DPAPI (bound to the user's Windows session)
-//! in `%LOCALAPPDATA%\ai-quota\amp.token`.
+//! Tokens pasted from the clipboard (Amp, `OpenCode`), encrypted with DPAPI (bound to the user's
+//! Windows session) in `%LOCALAPPDATA%\ai-quota\<provider>.token`.
 
 use std::path::PathBuf;
 
@@ -9,12 +9,15 @@ use windows::Win32::Security::Cryptography::{
 };
 use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
 use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
-use windows::core::w;
+use windows::core::HSTRING;
+
+use crate::model::Provider;
 
 const CF_UNICODETEXT: u32 = 13;
 
-fn path() -> Option<PathBuf> {
-    Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("ai-quota").join("amp.token"))
+fn path(p: Provider) -> Option<PathBuf> {
+    let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("ai-quota");
+    Some(dir.join(format!("{}.token", p.short_name().to_lowercase())))
 }
 
 struct DpapiOutput(CRYPT_INTEGER_BLOB);
@@ -29,12 +32,14 @@ impl Drop for DpapiOutput {
     }
 }
 
-fn crypt(data: &[u8], decrypt: bool) -> Option<Vec<u8>> {
+fn crypt(data: &[u8], decrypt: bool, p: Provider) -> Option<Vec<u8>> {
     let input = CRYPT_INTEGER_BLOB { cbData: u32::try_from(data.len()).ok()?, pbData: data.as_ptr().cast_mut() };
     let mut out = DpapiOutput(CRYPT_INTEGER_BLOB::default());
+    let description = HSTRING::from(format!("AI Quota - {}", p.short_name()));
     // SAFETY: input points to data with a checked byte length. DPAPI does not modify input,
     // despite the binding's mutable pointer. out is writable and owned by its freeing guard;
-    // successful DPAPI calls supply an initialized output allocation of cbData bytes.
+    // successful DPAPI calls supply an initialized output allocation of cbData bytes. The
+    // description stays alive for the call.
     unsafe {
         if decrypt {
             CryptUnprotectData(&raw const input, None, None, None, None, CRYPTPROTECT_UI_FORBIDDEN, &raw mut out.0)
@@ -42,7 +47,7 @@ fn crypt(data: &[u8], decrypt: bool) -> Option<Vec<u8>> {
         } else {
             CryptProtectData(
                 &raw const input,
-                w!("AI Quota - Amp"),
+                &description,
                 None,
                 None,
                 None,
@@ -59,31 +64,31 @@ fn crypt(data: &[u8], decrypt: bool) -> Option<Vec<u8>> {
     }
 }
 
-fn protect(data: &[u8]) -> Option<Vec<u8>> {
-    crypt(data, false)
+fn protect(data: &[u8], p: Provider) -> Option<Vec<u8>> {
+    crypt(data, false, p)
 }
 
-fn unprotect(sealed: &[u8]) -> Option<Vec<u8>> {
-    crypt(sealed, true)
+fn unprotect(sealed: &[u8], p: Provider) -> Option<Vec<u8>> {
+    crypt(sealed, true, p)
 }
 
-pub fn save_amp_token(token: &str) -> bool {
-    let (Some(path), Some(sealed)) = (path(), protect(token.as_bytes())) else { return false };
+pub fn save_token(p: Provider, token: &str) -> bool {
+    let (Some(path), Some(sealed)) = (path(p), protect(token.as_bytes(), p)) else { return false };
     let _ = std::fs::create_dir_all(path.parent().unwrap_or(&path));
     std::fs::write(path, sealed).is_ok()
 }
 
-pub fn load_amp_token() -> Option<String> {
-    String::from_utf8(unprotect(&std::fs::read(path()?).ok()?)?).ok()
+pub fn load_token(p: Provider) -> Option<String> {
+    String::from_utf8(unprotect(&std::fs::read(path(p)?).ok()?, p)?).ok()
 }
 
-pub fn has_amp_token() -> bool {
-    path().is_some_and(|p| p.exists())
+pub fn has_token(p: Provider) -> bool {
+    path(p).is_some_and(|p| p.exists())
 }
 
-pub fn clear_amp_token() {
-    if let Some(p) = path() {
-        let _ = std::fs::remove_file(p);
+pub fn clear_token(p: Provider) {
+    if let Some(path) = path(p) {
+        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -115,17 +120,18 @@ pub fn clipboard_text() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{protect, unprotect};
+    use crate::model::Provider;
 
     #[test]
     fn dpapi_roundtrip() {
         let token = b"sgamp_test_token";
-        let sealed = protect(token).unwrap();
+        let sealed = protect(token, Provider::Amp).unwrap();
         assert!(!sealed.windows(token.len()).any(|w| w == token));
-        assert_eq!(unprotect(&sealed).unwrap(), token);
+        assert_eq!(unprotect(&sealed, Provider::Amp).unwrap(), token);
     }
 
     #[test]
     fn rejects_invalid_dpapi_blob() {
-        assert!(unprotect(b"not a DPAPI blob").is_none());
+        assert!(unprotect(b"not a DPAPI blob", Provider::Opencode).is_none());
     }
 }

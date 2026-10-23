@@ -64,6 +64,8 @@ struct Providers {
     codex: Option<bool>,
     #[serde(default, deserialize_with = "lenient")]
     amp: Option<bool>,
+    #[serde(default, deserialize_with = "lenient")]
+    opencode: Option<bool>,
 }
 
 /// Only sound on an in-memory `serde_json::Value`: a streaming deserializer could be left
@@ -104,6 +106,7 @@ impl Settings {
                     Provider::Claude => p.claude,
                     Provider::Codex => p.codex,
                     Provider::Amp => p.amp,
+                    Provider::Opencode => p.opencode,
                 }
                 .unwrap_or(true)
             }),
@@ -120,6 +123,7 @@ impl Settings {
                 claude: Some(self.enabled[Provider::Claude]),
                 codex: Some(self.enabled[Provider::Codex]),
                 amp: Some(self.enabled[Provider::Amp]),
+                opencode: Some(self.enabled[Provider::Opencode]),
             }),
             poll_minutes: Some(self.poll_minutes),
             poll_faster_when_hot: Some(self.poll_faster_when_hot),
@@ -148,7 +152,8 @@ mod tests {
   "providers": {
     "claude": true,
     "codex": false,
-    "amp": true
+    "amp": true,
+    "opencode": true
   },
   "poll_minutes": 10,
   "poll_faster_when_hot": false

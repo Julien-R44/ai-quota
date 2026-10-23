@@ -21,7 +21,7 @@ const SETTING_ROW: f32 = 40.0;
 const SECTION_PAD: f32 = 4.0;
 const SECTION_GAP: f32 = 10.0;
 const FOOTER_H: f32 = 26.0;
-const PROVIDER_HELP_H: f32 = 44.0;
+const PROVIDER_HELP_H: f32 = 58.0;
 
 const AMP_TOKEN_URL: &str = "https://ampcode.com/settings";
 
@@ -35,18 +35,23 @@ pub(super) enum Ctl {
     FasterWhenHot,
     OpenFolder,
     ClearHistory,
-    PasteAmpToken,
-    ClearAmpToken,
+    PasteToken(Provider),
+    ClearToken(Provider),
     /// A provider's cog: opens its settings page.
     ProviderPage(Provider),
     /// "Get a token" link.
-    OpenTokenPage,
+    OpenTokenPage(Provider),
 }
 
 fn has_settings_page(p: Provider) -> bool {
+    matches!(p, Provider::Amp | Provider::Opencode)
+}
+
+/// Where the user creates the token this provider needs.
+fn token_url(p: Provider) -> &'static str {
     match p {
-        Provider::Amp => true,
-        Provider::Claude | Provider::Codex => false,
+        Provider::Opencode => "https://opencode.ai/auth",
+        Provider::Amp | Provider::Claude | Provider::Codex => AMP_TOKEN_URL,
     }
 }
 
@@ -54,9 +59,10 @@ pub(super) struct SettingsCtx<'a> {
     pub(super) autostart: bool,
     pub(super) confirm_clear: bool,
     pub(super) memory: &'a str,
-    pub(super) amp_token: bool,
+    /// The open provider page has a token saved.
+    pub(super) token_saved: bool,
     /// Feedback of the last token action ("Token saved"...).
-    pub(super) amp_note: Option<&'a str>,
+    pub(super) token_note: Option<&'a str>,
 }
 
 /// A titled card of `rows` setting rows.
@@ -234,7 +240,31 @@ pub(super) fn draw(gfx: &Gfx, th: &Theme, hits: &mut Hits, ctx: &SettingsCtx, la
     gfx.text(ctx.memory, &gfx.fonts.caption, layout.footer, th.text3, DWRITE_TEXT_ALIGNMENT_LEADING);
 }
 
-/// A provider's settings page: for now, the Amp token.
+/// The token a provider needs: its wording and its help text.
+fn token_texts(p: Provider) -> (&'static str, &'static str, &'static str, &'static str) {
+    match p {
+        Provider::Opencode => (
+            tr("Clé API", "API key"),
+            tr("Récupérer une clé sur opencode.ai", "Get an API key on opencode.ai"),
+            tr(
+                "Crée une clé API dans la console OpenCode, puis colle-la. Chiffrée avec ta session Windows. Abonnement OpenCode Go requis.",
+                "Create an API key in the OpenCode console, then paste it. Encrypted with your Windows session. Requires an OpenCode Go subscription.",
+            ),
+            tr("Aucune clé", "No API key"),
+        ),
+        Provider::Amp | Provider::Claude | Provider::Codex => (
+            tr("Token d’accès", "Access token"),
+            tr("Récupérer un token sur ampcode.com", "Get a token on ampcode.com"),
+            tr(
+                "Crée un token d’accès dans tes réglages Amp, copie-le, puis clique sur Coller. Il est chiffré avec ta session Windows.",
+                "Create an access token in your Amp settings, copy it, then click Paste. It is encrypted with your Windows session.",
+            ),
+            tr("Aucun token", "No token"),
+        ),
+    }
+}
+
+/// A provider's settings page: for now, its token.
 pub(super) fn draw_provider(
     gfx: &Gfx,
     th: &Theme,
@@ -253,26 +283,29 @@ pub(super) fn draw_provider(
         DWRITE_TEXT_ALIGNMENT_LEADING,
     );
 
+    let (section, link_text, help, missing) = token_texts(p);
     let x = MARGIN;
     let w = WIDTH - 2.0 * MARGIN;
     let s = &layout.token;
-    draw_section(gfx, th, tr("Token d’accès", "Access token"), s);
+    draw_section(gfx, th, section, s);
 
     let ry = s.row(0);
-    let state = ctx.amp_note.unwrap_or(if ctx.amp_token {
-        tr("Token enregistré (chiffré)", "Token saved (encrypted)")
-    } else {
-        tr("Aucun token", "No token")
-    });
+    let saved = match p {
+        Provider::Opencode => tr("Clé enregistrée (chiffrée)", "API key saved (encrypted)"),
+        Provider::Amp | Provider::Claude | Provider::Codex => {
+            tr("Token enregistré (chiffré)", "Token saved (encrypted)")
+        }
+    };
+    let state = ctx.token_note.unwrap_or(if ctx.token_saved { saved } else { missing });
     let mut right = x + w - 14.0;
-    if ctx.amp_token {
+    if ctx.token_saved {
         let remove = rect(right - 70.0, ry + 7.0, 70.0, SETTING_ROW - 14.0);
-        button(gfx, th, hits, remove, tr("Retirer", "Remove"), Ctl::ClearAmpToken, false);
+        button(gfx, th, hits, remove, tr("Retirer", "Remove"), Ctl::ClearToken(p), false);
         right = remove.left - 6.0;
     }
     let paste = rect(right - 70.0, ry + 7.0, 70.0, SETTING_ROW - 14.0);
-    button(gfx, th, hits, paste, tr("Coller", "Paste"), Ctl::PasteAmpToken, false);
-    let color = if ctx.amp_token { th.text1 } else { th.text2 };
+    button(gfx, th, hits, paste, tr("Coller", "Paste"), Ctl::PasteToken(p), false);
+    let color = if ctx.token_saved { th.text1 } else { th.text2 };
     gfx.text(
         state,
         &gfx.fonts.label,
@@ -283,14 +316,13 @@ pub(super) fn draw_provider(
 
     let ly = s.row(1);
     let link = rect(x + 4.0, ly + 2.0, w - 8.0, SETTING_ROW - 4.0);
-    let hovered = hits.add(link, Hit::Ctl(Ctl::OpenTokenPage));
+    let hovered = hits.add(link, Hit::Ctl(Ctl::OpenTokenPage(p)));
     if hovered {
         gfx.fill(link, 6.0, th.button_hover);
     }
-    let text = tr("Récupérer un token sur ampcode.com", "Get a token on ampcode.com");
-    let tw = gfx.text_width(text, &gfx.fonts.label);
+    let tw = gfx.text_width(link_text, &gfx.fonts.label);
     gfx.text(
-        text,
+        link_text,
         &gfx.fonts.label,
         rect(x + 14.0, ly, tw + 2.0, SETTING_ROW),
         th.accent(),
@@ -308,10 +340,6 @@ pub(super) fn draw_provider(
         DWRITE_TEXT_ALIGNMENT_LEADING,
     );
 
-    let help = tr(
-        "Crée un token d’accès dans tes réglages Amp, copie-le, puis clique sur Coller. Il est chiffré avec ta session Windows.",
-        "Create an access token in your Amp settings, copy it, then click Paste. It is encrypted with your Windows session.",
-    );
     gfx.text(help, &gfx.fonts.caption_wrap, layout.help, th.text3, DWRITE_TEXT_ALIGNMENT_LEADING);
 }
 
@@ -369,12 +397,26 @@ fn button(gfx: &Gfx, th: &Theme, hits: &mut Hits, r: D2D_RECT_F, text: &str, ctl
     gfx.text(text, &gfx.fonts.caption, r, if danger { th.crit } else { th.text1 }, DWRITE_TEXT_ALIGNMENT_CENTER);
 }
 
-fn note_amp(text: &str) {
+fn note_token(text: &str) {
     with_popup(|p| {
-        p.amp_token = secret::has_amp_token();
-        p.amp_note = Some((text.to_string(), Instant::now()));
+        p.token_note = Some((text.to_string(), Instant::now()));
         p.start_confirmation_timer();
     });
+}
+
+/// Message after saving or removing `p`'s token.
+fn token_saved_text(p: Provider) -> &'static str {
+    match p {
+        Provider::Opencode => tr("Clé enregistrée", "API key saved"),
+        Provider::Amp | Provider::Claude | Provider::Codex => tr("Token enregistré", "Token saved"),
+    }
+}
+
+fn token_removed_text(p: Provider) -> &'static str {
+    match p {
+        Provider::Opencode => tr("Clé retirée", "API key removed"),
+        Provider::Amp | Provider::Claude | Provider::Codex => tr("Token retiré", "Token removed"),
+    }
 }
 
 pub(super) fn apply(ctl: Ctl) {
@@ -403,24 +445,24 @@ pub(super) fn apply(ctl: Ctl) {
         Ctl::ProviderPage(p) => {
             with_popup(|popup| popup.set_view(View::Provider(p)));
         }
-        Ctl::OpenTokenPage => open_external(AMP_TOKEN_URL),
-        Ctl::PasteAmpToken => {
+        Ctl::OpenTokenPage(p) => open_external(token_url(p)),
+        Ctl::PasteToken(p) => {
             let token = secret::clipboard_text().map(|t| t.trim().to_string()).unwrap_or_default();
             let plausible = token.len() >= 16 && !token.chars().any(char::is_whitespace);
-            let note = if plausible && secret::save_amp_token(&token) {
+            let note = if plausible && secret::save_token(p, &token) {
                 app.refresh(false);
-                tr("Token enregistré", "Token saved")
+                token_saved_text(p)
             } else {
                 tr("Pas de token dans le presse-papiers", "No token in the clipboard")
             };
-            note_amp(note);
+            note_token(note);
         }
-        Ctl::ClearAmpToken => {
-            secret::clear_amp_token();
+        Ctl::ClearToken(p) => {
+            secret::clear_token(p);
             if let Some(snap) = app.snapshot.borrow_mut().as_mut() {
-                snap.usages.retain(|u| u.provider != Provider::Amp);
+                snap.usages.retain(|u| u.provider != p);
             }
-            note_amp(tr("Token retiré", "Token removed"));
+            note_token(token_removed_text(p));
         }
         Ctl::ClearHistory => {
             let confirmed = with_popup(|p| {

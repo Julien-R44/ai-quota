@@ -205,9 +205,8 @@ struct Popup {
     confirm_clear: Option<Instant>,
     /// Process memory, read when entering Settings.
     memory: String,
-    /// An Amp token is saved.
-    amp_token: bool,
-    amp_note: Option<(String, Instant)>,
+    /// Feedback on the last token action, shown on the provider page.
+    token_note: Option<(String, Instant)>,
     tracking: bool,
     animating: bool,
 }
@@ -429,8 +428,7 @@ pub fn open(anchor: Option<RECT>) {
         autostart: false,
         confirm_clear: None,
         memory: String::new(),
-        amp_token: false,
-        amp_note: None,
+        token_note: None,
         animating: false,
     };
     popup.apply_dwm();
@@ -517,8 +515,7 @@ impl Popup {
         self.view = view;
         self.view_changed = Instant::now();
         self.hits.hover = None;
-        self.amp_token = secret::has_amp_token();
-        self.amp_note = None;
+        self.token_note = None;
         if view == View::Settings {
             self.autostart = sys::autostart_enabled();
             self.memory = settings_view::memory_text();
@@ -559,13 +556,17 @@ impl Popup {
         let loading = app.loading.get();
         let t = self.opened.elapsed().as_secs_f32();
         let confirm_clear = self.confirm_clear.is_some_and(|at| at.elapsed().as_secs_f32() < CONFIRM_SECS);
-        let note = self.amp_note.as_ref().filter(|(_, at)| at.elapsed().as_secs_f32() < CONFIRM_SECS);
+        let note = self.token_note.as_ref().filter(|(_, at)| at.elapsed().as_secs_f32() < CONFIRM_SECS);
+        let token_saved = match self.view {
+            View::Provider(p) => secret::has_token(p),
+            View::Main | View::Settings => false,
+        };
         let ctx = SettingsCtx {
             autostart: self.autostart,
             confirm_clear,
             memory: &self.memory,
-            amp_token: self.amp_token,
-            amp_note: note.map(|(text, _)| text.as_str()),
+            token_saved,
+            token_note: note.map(|(text, _)| text.as_str()),
         };
         let (gfx, th, hits) = (&mut self.gfx, &self.theme, &mut self.hits);
         hits.clear();
@@ -803,7 +804,7 @@ mod tests {
     #[test]
     fn heights_match_previous_formulas() {
         assert_eq!(Layout::new(View::Main, None, None).height(), 132.0);
-        assert_eq!(Layout::new(View::Settings, None, None).height(), 610.0);
-        assert_eq!(Layout::new(View::Provider(Provider::Amp), None, None).height(), 222.0);
+        assert_eq!(Layout::new(View::Settings, None, None).height(), 650.0);
+        assert_eq!(Layout::new(View::Provider(Provider::Amp), None, None).height(), 236.0);
     }
 }

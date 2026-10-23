@@ -8,11 +8,12 @@ pub enum Provider {
     Claude,
     Codex,
     Amp,
+    Opencode,
 }
 
 impl Provider {
-    pub const COUNT: usize = 3;
-    pub const ALL: [Provider; Provider::COUNT] = [Provider::Claude, Provider::Codex, Provider::Amp];
+    pub const COUNT: usize = 4;
+    pub const ALL: [Provider; Provider::COUNT] = [Provider::Claude, Provider::Codex, Provider::Amp, Provider::Opencode];
 
     /// Slot in [`PerProvider`]. A new variant does not compile until it gets one here.
     const fn index(self) -> usize {
@@ -20,6 +21,7 @@ impl Provider {
             Provider::Claude => 0,
             Provider::Codex => 1,
             Provider::Amp => 2,
+            Provider::Opencode => 3,
         }
     }
 
@@ -28,6 +30,7 @@ impl Provider {
             Provider::Claude => "Claude Code",
             Provider::Codex => "Codex",
             Provider::Amp => "Amp",
+            Provider::Opencode => "OpenCode",
         }
     }
 
@@ -36,6 +39,7 @@ impl Provider {
             Provider::Claude => "Claude",
             Provider::Codex => "Codex",
             Provider::Amp => "Amp",
+            Provider::Opencode => "OpenCode",
         }
     }
 
@@ -44,6 +48,7 @@ impl Provider {
             Provider::Claude => "https://claude.ai/settings/usage",
             Provider::Codex => "https://chatgpt.com/codex/settings/usage",
             Provider::Amp => "https://ampcode.com/settings",
+            Provider::Opencode => "https://opencode.ai/auth",
         }
     }
 
@@ -54,6 +59,10 @@ impl Provider {
             Provider::Amp => {
                 tr("Colle un nouveau token d’accès dans les réglages.", "Paste a new access token in Settings.")
             }
+            Provider::Opencode => tr(
+                "Relance `opencode auth login`, ou colle une clé API dans les réglages.",
+                "Run `opencode auth login`, or paste an API key in Settings.",
+            ),
         }
     }
 }
@@ -69,8 +78,8 @@ impl<T> PerProvider<T> {
 
     /// Like [`PerProvider::from_fn`], stopping at the first error.
     pub fn try_from_fn<E>(f: impl FnMut(Provider) -> Result<T, E>) -> Result<Self, E> {
-        let [claude, codex, amp] = Provider::ALL.map(f);
-        Ok(PerProvider([claude?, codex?, amp?]))
+        let [claude, codex, amp, opencode] = Provider::ALL.map(f);
+        Ok(PerProvider([claude?, codex?, amp?, opencode?]))
     }
 }
 
@@ -98,6 +107,8 @@ pub enum LimitKind {
     /// Per-model weekly limit ("Fable", "Opus"…).
     WeeklyModel(String),
     Days(i64),
+    /// A monthly window (`OpenCode` Go).
+    Monthly,
     /// Amp's daily free quota.
     AmpFree,
     /// Amp's monthly Agent budget.
@@ -177,6 +188,10 @@ pub enum LimitKey {
     CodexWindow {
         seconds: i64,
     },
+    /// `OpenCode` Go identifies its windows by their length too.
+    OpencodeWindow {
+        seconds: i64,
+    },
     AmpAgent,
     AmpOrbs,
     AmpFree,
@@ -190,6 +205,7 @@ impl fmt::Display for LimitKey {
             LimitKey::ClaudeWeeklyModel(model) => write!(f, "claude.weekly.{}", model.to_lowercase()),
             LimitKey::ClaudeOther(kind) => write!(f, "claude.{kind}"),
             LimitKey::CodexWindow { seconds } => write!(f, "codex.{seconds}"),
+            LimitKey::OpencodeWindow { seconds } => write!(f, "opencode.{seconds}"),
             LimitKey::AmpAgent => f.write_str("amp.agent"),
             LimitKey::AmpOrbs => f.write_str("amp.orbs"),
             LimitKey::AmpFree => f.write_str("amp.free"),
@@ -220,6 +236,7 @@ impl Limit {
             LimitKind::WeeklyModel(model) => format!("{} · {model}", tr("Hebdo", "Weekly")),
             LimitKind::Days(days) if fr => format!("Fenêtre de {days}\u{a0}jours"),
             LimitKind::Days(days) => format!("{days}-day window"),
+            LimitKind::Monthly => tr("Mensuel", "Monthly").into(),
             LimitKind::AmpFree => "Amp Free".into(),
             LimitKind::AmpAgent => "Agent".into(),
             LimitKind::AmpOrbs(size) => match size.strip_prefix("a1.") {
@@ -240,6 +257,7 @@ impl Limit {
             LimitKind::WeeklyModel(model) => model.clone(),
             LimitKind::Days(days) if fr => format!("{days}\u{a0}j"),
             LimitKind::Days(days) => format!("{days}d"),
+            LimitKind::Monthly => tr("mois", "mo").into(),
             LimitKind::AmpFree => "free".into(),
             LimitKind::AmpAgent => "agent".into(),
             LimitKind::AmpOrbs(_) => "orbs".into(),
@@ -375,6 +393,7 @@ mod tests {
             (LimitKey::ClaudeWeeklyModel("Opus".into()), "claude.weekly.opus"),
             (LimitKey::ClaudeOther("weekly_oauth_apps".into()), "claude.weekly_oauth_apps"),
             (LimitKey::CodexWindow { seconds: 18000 }, "codex.18000"),
+            (LimitKey::OpencodeWindow { seconds: 18000 }, "opencode.18000"),
             (LimitKey::AmpAgent, "amp.agent"),
             (LimitKey::AmpOrbs, "amp.orbs"),
             (LimitKey::AmpFree, "amp.free"),

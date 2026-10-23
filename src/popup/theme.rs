@@ -75,6 +75,9 @@ impl Theme {
             // Amp identity: very dark green and cream (#DFDFC1).
             (Provider::Amp, true) => (rgb(0xDFDFC1, 1.0), rgb(0xDFDFC1, 1.0)),
             (Provider::Amp, false) => (rgb(0x2F4A2C, 1.0), rgb(0x2C3A2A, 1.0)),
+            // OpenCode identity: the black and white of its logo.
+            (Provider::Opencode, true) => (rgb(0xE4E4E7, 1.0), rgb(0xE4E4E7, 1.0)),
+            (Provider::Opencode, false) => (rgb(0x18181B, 1.0), rgb(0x3F3F46, 1.0)),
         }
     }
 

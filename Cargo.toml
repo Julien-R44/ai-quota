@@ -2,7 +2,7 @@
 name = "ai-quota"
 version = "0.1.0"
 edition = "2024"
-description = "Claude Code, Codex, and Amp usage limits in the Windows tray, for almost no memory."
+description = "Claude Code, Codex, Amp, and OpenCode Go usage limits in the Windows tray, for almost no memory."
 license = "MIT"
 repository = "https://github.com/Julien-R44/ai-quota"
 

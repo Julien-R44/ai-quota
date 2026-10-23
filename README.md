@@ -1,6 +1,6 @@
 # AI Quota
 
-A Windows tray app that shows your **Claude Code**, **Codex**, and **Amp** usage limits. Click the tray icon to open a Windows 11 flyout.
+A Windows tray app that shows your **Claude Code**, **Codex**, **Amp**, and **OpenCode Go** usage limits. Click the tray icon to open a Windows 11 flyout.
 
 ![The flyout, a session limit expanded into its usage chart, and the settings view](docs/screenshot.png)
 
@@ -11,6 +11,7 @@ A Windows tray app that shows your **Claude Code**, **Codex**, and **Amp** usage
 - Click a limit to expand its chart: recorded usage, the steady-pace line, and a projection of the recent rate to the reset.
 - Free resets you have banked (Claude and Codex).
 - Amp: Agent budget in dollars, Orb hours, Amp Free, and credits.
+- OpenCode Go: five-hour, weekly, and monthly usage windows.
 - Settings: English or French, light, dark, or system theme, start with Windows, tracked tools, refresh interval.
 - Keys: `R` or `F5` refreshes. `Esc` goes back or closes.
 
@@ -37,6 +38,14 @@ To track Amp:
 
 The app also reads `AMP_API_KEY` when it is set.
 
+To track OpenCode Go:
+
+1. Create an API key in the [OpenCode console](https://opencode.ai/auth) and copy it.
+2. In the flyout, open **Settings**, then select the gear next to **OpenCode**.
+3. Select **Paste**.
+
+The app also reads `OPENCODE_API_KEY` when it is set, and the key saved by `opencode auth login` in `auth.json` (older OpenCode versions; recent ones keep credentials in their database).
+
 ## Data sources
 
 | Tool | Credentials | Endpoint |
@@ -44,12 +53,13 @@ The app also reads `AMP_API_KEY` when it is set.
 | Claude Code | `%USERPROFILE%\.claude\.credentials.json` | `GET api.anthropic.com/api/oauth/usage` |
 | Codex | `%USERPROFILE%\.codex\auth.json` | `GET chatgpt.com/backend-api/wham/usage` |
 | Amp | Pasted token or `AMP_API_KEY` | `POST ampcode.com/api/internal?userDisplayBalanceInfo` |
+| OpenCode Go | Pasted key, `OPENCODE_API_KEY`, or `auth.json` | `GET opencode.ai/zen/go/v1/usage` |
 
 These endpoints are not documented and can change. They report usage for the whole account, so cloud tasks count too.
 
 The app never starts a CLI. Each refresh is one HTTPS request per tool, made with WinHTTP, and HTTP redirects are refused.
 
-`CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected.
+`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and `XDG_DATA_HOME` are respected.
 
 ### Claude token refresh
 

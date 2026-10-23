@@ -156,6 +156,7 @@ impl Gfx {
             Provider::Claude => svgpath::geometry(&factory, logos::CLAUDE, false),
             Provider::Codex => svgpath::geometry(&factory, logos::CODEX, true),
             Provider::Amp => svgpath::geometry(&factory, logos::AMP, false),
+            Provider::Opencode => svgpath::geometry(&factory, logos::OPENCODE, true),
         })?;
         Ok(Gfx {
             _ui_thread: PhantomData,
@@ -384,7 +385,7 @@ impl Gfx {
     pub(super) fn provider_logo(&self, th: &Theme, p: Provider, x: f32, y: f32) {
         let color = match p {
             Provider::Claude => rgb(0xD97757, 1.0),
-            Provider::Codex => th.text1,
+            Provider::Codex | Provider::Opencode => th.text1,
             Provider::Amp => {
                 // Amp app icon: dark green square, cream wordmark.
                 let badge = rect(x, y, 20.0, 20.0);

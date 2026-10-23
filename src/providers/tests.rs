@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use super::{Ctx, amp, claude, codex, fetch_all_in};
+use super::{Ctx, amp, claude, codex, fetch_all_in, opencode};
 use crate::http::{Http, Response};
-use crate::model::{PerProvider, Problem, Provider, Status, Usage};
-use crate::timefmt::now;
+use crate::model::{LimitKind, PerProvider, Problem, Provider, Status, Usage};
+use crate::timefmt::{now, parse_iso8601};
 
 /// Fake server: answers with scripted responses in order and records every request.
 struct FakeHttp {
@@ -87,7 +87,9 @@ fn ctx<'a>(http: &'a FakeHttp, dir: &Path) -> Ctx<'a> {
         state_dir: Some(dir.join("state")),
         claude_dir: dir.join("claude"),
         codex_dir: dir.join("codex"),
+        opencode_dir: dir.join("opencode"),
         amp_token: Some("amp-token".into()),
+        opencode_token: None,
     }
 }
 
@@ -255,4 +257,69 @@ fn disabled_providers_are_not_fetched() {
     assert_eq!(http.calls(), ["GET chatgpt.com/backend-api/wham/usage (Bearer codex-token)"]);
     let providers: Vec<_> = snapshot.usages.iter().map(|u| u.provider).collect();
     assert_eq!(providers, [Provider::Codex]);
+}
+
+const OPENCODE_AUTH: &str = r#"{"opencode": {"type": "api", "key": "go-token"}}"#;
+
+fn opencode_usage() -> String {
+    r#"{"usage": {
+        "rolling": {"status": "ok", "percent": 12, "resetsAt": "2030-01-01T05:00:00.000Z"},
+        "weekly": {"status": "ok", "percent": 34, "resetsAt": "2030-01-07T00:00:00.000Z"},
+        "monthly": {"status": "ok", "percent": 56, "resetInSec": 86400}}}"#
+        .into()
+}
+
+#[test]
+fn opencode_reads_the_cli_key_and_parses_the_go_windows() {
+    let dir = TempDir::new();
+    dir.write("opencode/auth.json", OPENCODE_AUTH);
+    let http = FakeHttp::new(vec![Ok(json(&opencode_usage()))]);
+
+    let usage = opencode::fetch(&ctx(&http, &dir.0), false).unwrap();
+
+    assert_eq!(http.calls(), ["GET opencode.ai/zen/go/v1/usage (Bearer go-token)"]);
+    assert!(usage.stale_since.is_none());
+    let Status::Ok(limits) = &usage.status else { panic!("expected limits, got {:?}", usage.status) };
+    assert_eq!(limits.len(), 3);
+    assert_eq!(limits[0].kind, LimitKind::Session { hours: 5 });
+    assert_eq!(limits[1].kind, LimitKind::Weekly);
+    assert_eq!(limits[2].kind, LimitKind::Monthly);
+    assert!((limits[0].percent - 12.0).abs() < f32::EPSILON);
+    assert_eq!(limits[0].resets_at, parse_iso8601("2030-01-01T05:00:00Z"));
+    // A relative reset counts from now.
+    assert_eq!(limits[2].resets_at, Some(now() + 86400));
+    assert_eq!(limits[0].window_secs, Some(5 * 3600));
+    assert!(dir.read("state/opencode.json").contains("rolling"));
+}
+
+#[test]
+fn opencode_reads_the_encrypted_token_before_the_cli_file() {
+    let dir = TempDir::new();
+    dir.write("opencode/auth.json", OPENCODE_AUTH);
+    let http = FakeHttp::new(vec![Ok(json(&opencode_usage()))]);
+    let ctx = Ctx { opencode_token: Some("pasted-token".into()), ..ctx(&http, &dir.0) };
+
+    opencode::fetch(&ctx, false).unwrap();
+
+    assert_eq!(http.calls(), ["GET opencode.ai/zen/go/v1/usage (Bearer pasted-token)"]);
+}
+
+#[test]
+fn opencode_without_credentials_is_hidden() {
+    let dir = TempDir::new();
+    let http = FakeHttp::new(vec![]);
+
+    assert!(opencode::fetch(&ctx(&http, &dir.0), false).is_none());
+    assert_eq!(http.calls().len(), 0);
+}
+
+#[test]
+fn opencode_unauthorized_means_session_expired() {
+    let dir = TempDir::new();
+    dir.write("opencode/auth.json", OPENCODE_AUTH);
+    let http = FakeHttp::new(vec![Ok(status(401, None))]);
+
+    let usage = opencode::fetch(&ctx(&http, &dir.0), false).unwrap();
+
+    assert_eq!(problem(&usage), Problem::SessionExpired(Provider::Opencode));
 }
